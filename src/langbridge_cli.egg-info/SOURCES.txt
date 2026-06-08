@@ -1,0 +1,9 @@
+README.md
+pyproject.toml
+src/langbridge_cli/__init__.py
+src/langbridge_cli/main.py
+src/langbridge_cli.egg-info/PKG-INFO
+src/langbridge_cli.egg-info/SOURCES.txt
+src/langbridge_cli.egg-info/dependency_links.txt
+src/langbridge_cli.egg-info/entry_points.txt
+src/langbridge_cli.egg-info/top_level.txt

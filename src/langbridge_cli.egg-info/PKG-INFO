@@ -1,0 +1,5 @@
+Metadata-Version: 2.4
+Name: langbridge-cli
+Version: 0.1.0
+Summary: A tiny interactive coding agent CLI backed by a Codex model.
+Requires-Python: >=3.11
