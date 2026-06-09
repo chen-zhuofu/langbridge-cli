@@ -1,4 +1,5 @@
 import getpass
+import copy
 import json
 import os
 import sys
@@ -44,6 +45,7 @@ def main():
     print(f"Agent loop log: {run_log_path}")
     print("Type /exit to quit.\n")
 
+    turn_id = 0
     while True:
         try:
             text = read_user_input(session)
@@ -56,8 +58,9 @@ def main():
         if text.strip() == "/exit":
             break
 
+        turn_id += 1
         messages.append({"role": "user", "content": text})
-        reply = run_agent(api_key, model, messages, run_log_path)
+        reply = run_agent(api_key, model, messages, run_log_path, turn_id)
         messages.append({"role": "assistant", "content": reply})
         print(f"\n{reply}\n")
 
@@ -94,24 +97,34 @@ def read_user_input(session):
     return input("langbridge> ")
 
 
-def run_agent(api_key, model, messages, run_log_path):
+def run_agent(api_key, model, messages, run_log_path, turn_id):
     agent_input = list(messages)
+    initial_agent_input = copy.deepcopy(agent_input)
+    steps = []
 
     for step in range(MAX_AGENT_STEPS):
-        write_agent_input_log(run_log_path, step, agent_input)
         data = create_response(api_key, model, agent_input)
         output = data.get("output", [])
         tool_calls = [item for item in output if item.get("type") == "function_call"]
+        step_output = copy.deepcopy(output)
 
         if not tool_calls:
-            return extract_output_text(output)
+            steps.append({"step": step, "output": step_output})
+            reply = extract_output_text(output)
+            write_turn_log(run_log_path, turn_id, initial_agent_input, steps, reply)
+            return reply
 
         agent_input.extend(output)
         for call in tool_calls:
             tool_output = run_tool_call(call)
             agent_input.append(tool_output)
+            step_output.append(tool_output)
 
-    return "Agent stopped because it reached the maximum tool-call steps."
+        steps.append({"step": step, "output": step_output})
+
+    reply = "Agent stopped because it reached the maximum tool-call steps."
+    write_turn_log(run_log_path, turn_id, initial_agent_input, steps, reply)
+    return reply
 
 
 def create_response(api_key, model, agent_input):
@@ -163,8 +176,14 @@ def approve_write_tool(name, arguments):
     return answer.strip().lower() in {"y", "yes"}
 
 
-def write_agent_input_log(run_log_path, step, agent_input):
-    record = {"step": step, "agent_input": agent_input}
+def write_turn_log(run_log_path, turn_id, initial_agent_input, steps, assistant_reply):
+    record = {
+        "turn_id": turn_id,
+        "user": extract_turn_user_input(initial_agent_input),
+        "agent_input": initial_agent_input,
+        "steps": steps,
+        "assistant": assistant_reply,
+    }
     records = []
     if run_log_path.exists():
         records = json.loads(run_log_path.read_text(encoding="utf-8"))
@@ -174,6 +193,13 @@ def write_agent_input_log(run_log_path, step, agent_input):
         json.dumps(records, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
+
+
+def extract_turn_user_input(agent_input):
+    for message in reversed(agent_input):
+        if message.get("role") == "user":
+            return message["content"]
+    raise ValueError("agent_input has no user message")
 
 
 def extract_output_text(output):
