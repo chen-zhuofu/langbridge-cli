@@ -22,7 +22,7 @@ DEFAULT_MODEL = "gpt-5.1-codex"
 CONFIG_DIR = Path.home() / ".langbridge"
 CONFIG_PATH = CONFIG_DIR / "config.json"
 HISTORY_PATH = CONFIG_DIR / "history"
-MAX_AGENT_STEPS = 20
+MAX_AGENT_STEPS = 5
 MAX_TOOL_SUMMARY_OUTPUT_CHARS = 300
 MAX_SESSION_CHOICES = 10
 MAX_SESSION_SUMMARY_INPUT_CHARS = 4_000
@@ -88,7 +88,6 @@ def main():
 
     print(f"langbridge-cli using {model}")
     print(f"Agent loop log: {run_log_path}")
-    print("Type /exit to quit.\n")
 
     while True:
         try:
@@ -106,10 +105,7 @@ def main():
         messages.append({"role": "user", "content": text})
         reply, steps = run_agent(api_key, model, messages, run_log_path, turn_id)
         write_session_summary(api_key, model, run_log_path)
-        messages.append({"role": "assistant", "content": reply})
-        tool_summary = summarize_turn_steps(steps)
-        if tool_summary:
-            messages.append({"role": "assistant", "content": tool_summary})
+        append_turn_messages(messages, steps, reply)
         print(f"\n{reply}\n")
 
 
@@ -211,12 +207,106 @@ def restore_session_messages(records):
     if not records:
         return []
 
-    last_record = records[-1]
-    messages = copy.deepcopy(last_record.get("input") or last_record.get("agent_input") or [])
-    assistant = last_record.get("assistant")
-    if assistant:
-        messages.append({"role": "assistant", "content": assistant})
+    messages = initial_messages_from_record(records[0])
+    for record in records:
+        user = record.get("user")
+        if user:
+            messages.append({"role": "user", "content": user})
+        append_turn_messages(messages, record.get("steps", []), record.get("assistant", ""))
     return messages
+
+
+def initial_messages_from_record(record):
+    messages = copy.deepcopy(record.get("input") or record.get("agent_input") or [])
+    initial = []
+    for message in messages:
+        if message.get("role") == "user":
+            break
+        initial.append(message)
+    return initial
+
+
+def append_turn_messages(messages, steps, assistant_reply):
+    messages.extend(tool_items_from_steps(steps))
+    if assistant_reply:
+        messages.append({"role": "assistant", "content": assistant_reply})
+
+
+def tool_items_from_steps(steps):
+    items = []
+    for step in steps:
+        if "output" in step:
+            items.extend(tool_items_from_output(step["output"]))
+        else:
+            items.extend(tool_items_from_formatted_step(step))
+    return items
+
+
+def tool_items_from_output(output):
+    return [
+        copy.deepcopy(item)
+        for item in output
+        if item.get("type") in {"reasoning", "function_call", "function_call_output"}
+    ]
+
+
+def tool_items_from_formatted_step(step):
+    reasoning = step.get("reasoning", [])
+    if not reasoning and step.get("action"):
+        return previous_tool_activity_message(step)
+
+    items = []
+    items.extend(copy.deepcopy(reasoning))
+    action = step.get("action", [])
+    if isinstance(action, dict):
+        action = action.get("tool_calls", [])
+
+    for item in action:
+        if item.get("name") and item.get("call_id"):
+            items.append(
+                {
+                    "type": "function_call",
+                    "call_id": item["call_id"],
+                    "name": item["name"],
+                    "arguments": json.dumps(item.get("arguments", {}), ensure_ascii=False),
+                }
+            )
+
+    for item in step.get("observation", []):
+        if item.get("call_id"):
+            items.append(
+                {
+                    "type": "function_call_output",
+                    "call_id": item["call_id"],
+                    "output": item.get("output", ""),
+                }
+            )
+    return items
+
+
+def previous_tool_activity_message(step):
+    lines = []
+    observations = {
+        item.get("call_id"): item.get("output", "")
+        for item in step.get("observation", [])
+        if item.get("call_id")
+    }
+    action = step.get("action", [])
+    if isinstance(action, dict):
+        action = action.get("tool_calls", [])
+
+    for item in action:
+        name = item.get("name")
+        call_id = item.get("call_id")
+        if not name:
+            continue
+        arguments = json.dumps(item.get("arguments", {}), ensure_ascii=False)
+        output = truncate_text(observations.get(call_id, ""), MAX_TOOL_SUMMARY_OUTPUT_CHARS)
+        lines.append(f"- {name}({arguments}): {output}")
+
+    if not lines:
+        return []
+    return [{"role": "assistant", "content": "Previous tool activity:\n" + "\n".join(lines)}]
 
 
 def last_turn_id(records):
@@ -392,6 +482,7 @@ def format_log_steps(steps):
     return [
         {
             "step": step["step"],
+            "reasoning": extract_reasoning_items(step.get("output", [])),
             "thought": extract_reasoning_summaries(step.get("output", [])),
             "action": format_actions(step.get("output", [])),
             "observation": format_observations(step.get("output", [])),
@@ -432,6 +523,10 @@ def parse_json_string(text):
         return json.loads(text)
     except json.JSONDecodeError:
         return text
+
+
+def extract_reasoning_items(output):
+    return [copy.deepcopy(item) for item in output if item.get("type") == "reasoning"]
 
 
 def summarize_turn_steps(steps):
