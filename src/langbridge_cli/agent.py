@@ -23,7 +23,7 @@ def run_agent(api_key, model, input, run_log_path, turn_id):
     for step in range(MAX_AGENT_STEPS):
         step_response = create_response(api_key, model, input).get("output", [])
         tool_calls = [item for item in step_response if item.get("type") == "function_call"]
-        print_step_trace(step_response, include_message=bool(tool_calls))
+        print_step_trace(step_response, include_message=bool(tool_calls), label="PM agent")
 
         if tool_calls:
             input.extend(step_response)

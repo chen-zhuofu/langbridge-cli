@@ -5,7 +5,7 @@ from openai import OpenAI, OpenAIError
 
 from langbridge_cli.config import MAX_SPECIALIST_AGENT_STEPS
 from langbridge_cli.debug import print_llm_request, print_llm_response
-from langbridge_cli.parse import extract_output_text
+from langbridge_cli.parse import extract_output_text, print_step_trace
 from langbridge_cli.roles import L3_TEST_ENGINEER_PROMPT, L4_ENGINEER_PROMPT
 from langbridge_cli.tool_schema import strip_tool_purpose, with_tool_purpose
 from langbridge_cli.tools import execution, filesystem, testing
@@ -113,6 +113,8 @@ def run_specialist_agent(api_key, model, system_prompt, user_prompt, tool_schema
         response = create_specialist_response(api_key, model, messages, tool_schemas, label)
         output = response.get("output", [])
         tool_calls = [item for item in output if item.get("type") == "function_call"]
+        if tool_calls:
+            print_step_trace(output, include_message=True, label=label)
         if not tool_calls:
             return extract_output_text(output)
 

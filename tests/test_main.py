@@ -1,4 +1,4 @@
-from langbridge_cli.parse import extract_reasoning_summaries, print_step_trace
+from langbridge_cli.parse import DIM, RESET, extract_reasoning_summaries, print_step_trace
 from langbridge_cli.prompt import SYSTEM_PROMPT
 from langbridge_cli.roles import L3_TEST_ENGINEER_PROMPT, L4_ENGINEER_PROMPT
 
@@ -56,8 +56,31 @@ def test_print_step_trace_uses_message_rationale(capsys):
     print_step_trace(output, include_message=True)
 
     assert capsys.readouterr().out == (
-        "\nThought: Read the target file.\n"
-        'Action: read_file({"path":"README.md"})\n'
+        f"\n{DIM}Agent: Read the target file.{RESET}\n"
+        f'{DIM}Agent: ↳ read_file({{"path":"README.md"}}){RESET}\n'
+    )
+
+
+def test_print_step_trace_uses_tool_purpose(capsys):
+    output = [
+        {
+            "type": "message",
+            "content": [
+                {"type": "output_text", "text": "This message should not win over purpose."},
+            ],
+        },
+        {
+            "type": "function_call",
+            "name": "read_file",
+            "arguments": '{"purpose":"Inspect the README before editing.","path":"README.md"}',
+        },
+    ]
+
+    print_step_trace(output, include_message=True, label="L3 test engineer")
+
+    assert capsys.readouterr().out == (
+        f"\n{DIM}L3 test engineer: Inspect the README before editing.{RESET}\n"
+        f'{DIM}L3 test engineer: ↳ read_file({{"path":"README.md"}}){RESET}\n'
     )
 
 
@@ -73,4 +96,4 @@ def test_print_step_trace_falls_back_to_reasoning_summary(capsys):
 
     print_step_trace(output)
 
-    assert capsys.readouterr().out == "\nThought: Inspect the repository.\n"
+    assert capsys.readouterr().out == f"\n{DIM}Agent: Inspect the repository.{RESET}\n"
