@@ -41,6 +41,29 @@ def test_restore_session_messages_compacts_old_records(monkeypatch):
     assert {"role": "assistant", "content": "recent answer"} in messages
 
 
+def make_reasoning_record(turn_id, user, assistant, tool_output):
+    record = make_record(turn_id, user, assistant, tool_output)
+    record["steps"][0]["reasoning"] = [{"type": "reasoning", "summary": []}]
+    return record
+
+
+def test_compacted_messages_truncate_stale_tool_outputs(monkeypatch):
+    records = [
+        make_reasoning_record(turn_id, f"task {turn_id}", f"answer {turn_id}", f"output {turn_id} " * 200)
+        for turn_id in range(1, 5)
+    ]
+    monkeypatch.setattr(session_module, "RECENT_CONTEXT_TOKENS", 10**9)
+
+    messages = session_module.restore_compacted_session_messages(records)
+
+    outputs = [item for item in messages if item.get("type") == "function_call_output"]
+    assert len(outputs) == 4
+    for item in outputs[:2]:
+        assert len(item["output"]) <= session_module.STALE_TOOL_OUTPUT_CHARS + len("...")
+    for item in outputs[2:]:
+        assert len(item["output"]) > session_module.STALE_TOOL_OUTPUT_CHARS
+
+
 def test_restore_session_messages_keeps_small_sessions_raw(monkeypatch):
     records = [make_record(1, "small task", "small answer")]
     monkeypatch.setattr(session_module, "COMPACT_WHEN_TOKENS_OVER", 100_000)

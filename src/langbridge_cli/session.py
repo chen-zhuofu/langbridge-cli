@@ -8,6 +8,7 @@ from langbridge_cli.config import (
     MAX_TOOL_SUMMARY_OUTPUT_CHARS,
     RECENT_CONTEXT_TOKENS,
     RUNS_DIR,
+    STALE_TOOL_OUTPUT_CHARS,
     SUMMARY_TARGET_CHARS,
 )
 from langbridge_cli.parse import truncate_text
@@ -111,7 +112,11 @@ def initial_messages_from_record(record):
         initial.append(message)
     return initial
 
-
+# compaction algorithm
+# 1. split full records into recent and old(RECENT_CONTEXT_TOKENS)
+# 2. for old records, call summarize_old_records to summarize
+# 3. for recent records, truncate the relativly old turn's tool output and keep compact[:max_chars]
+# TODO: LLM summary
 def restore_compacted_session_messages(records):
     initial = initial_messages_from_record(records[0])
     recent_records = select_recent_records(records)
@@ -122,12 +127,23 @@ def restore_compacted_session_messages(records):
     if summary:
         messages.append({"role": "assistant", "content": summary})
 
-    for record in recent_records:
+    for index, record in enumerate(recent_records):
         user = record.get("user")
         if user:
             messages.append({"role": "user", "content": user})
-        append_turn_messages(messages, record.get("steps", []), record.get("assistant", ""))
+        turn_messages = []
+        append_turn_messages(turn_messages, record.get("steps", []), record.get("assistant", ""))
+        # Full tool outputs are kept only for the last two turns; older ones are stale.
+        if index < len(recent_records) - 2:
+            truncate_stale_tool_outputs(turn_messages)
+        messages.extend(turn_messages)
     return messages
+
+
+def truncate_stale_tool_outputs(items):
+    for item in items:
+        if item.get("type") == "function_call_output":
+            item["output"] = truncate_text(item.get("output", ""), STALE_TOOL_OUTPUT_CHARS)
 
 
 def select_recent_records(records):

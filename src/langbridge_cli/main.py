@@ -10,6 +10,7 @@ if __package__ in (None, ""):
 
 from langbridge_cli.agent import run_agent
 from langbridge_cli.config import (
+    COMPACT_WHEN_TOKENS_OVER,
     CONFIG_DIR,
     DEFAULT_MODEL,
     HISTORY_PATH,
@@ -19,8 +20,10 @@ from langbridge_cli.logging import write_session_summary
 from langbridge_cli.prompt import SYSTEM_PROMPT
 from langbridge_cli.session import (
     create_run_log_path,
+    estimate_tokens,
     last_turn_id,
     read_session_records,
+    restore_compacted_session_messages,
     restore_session_messages,
     select_previous_session,
 )
@@ -63,6 +66,9 @@ def main():
             break
 
         turn_id += 1
+        if estimate_tokens(messages) > COMPACT_WHEN_TOKENS_OVER:
+            messages = restore_compacted_session_messages(read_session_records(run_log_path))
+            print("(compacted older context to stay under the token budget)")
         messages.append({"role": "user", "content": text})
         run_agent(api_key, model, messages, run_log_path, turn_id)
         write_session_summary(api_key, model, run_log_path)
