@@ -1,6 +1,5 @@
 from langbridge_cli.parse import DIM, RESET, extract_reasoning_summaries, print_step_trace
-from langbridge_cli.prompt import SYSTEM_PROMPT
-from langbridge_cli.roles import L3_TEST_ENGINEER_PROMPT, L4_ENGINEER_PROMPT
+from langbridge_cli.roles import L3_TEST_ENGINEER_PROMPT, L4_ENGINEER_PROMPT, SYSTEM_PROMPT
 
 
 def test_system_prompt_defines_pm_ralph_loop_role():

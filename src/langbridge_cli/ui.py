@@ -9,7 +9,7 @@ from textual.widgets import Button, Footer, Header, Input, RichLog, Select, Stat
 from langbridge_cli.agent import run_agent
 from langbridge_cli.config import COMPACT_WHEN_TOKENS_OVER, DEFAULT_MODEL, load_api_key
 from langbridge_cli.context import estimate_tokens, restore_compacted_session_messages, restore_session_messages
-from langbridge_cli.prompt import SYSTEM_PROMPT
+from langbridge_cli.roles import SYSTEM_PROMPT
 from langbridge_cli.session import (
     create_run_log_path,
     label_session,

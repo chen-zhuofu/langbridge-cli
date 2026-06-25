@@ -7,7 +7,7 @@ from openai import OpenAI, OpenAIError
 
 from langbridge_cli.config import MAX_AGENT_STEPS, MAX_RALPH_LOOPS, WRITE_TOOLS
 from langbridge_cli.debug import print_llm_request, print_llm_response
-from langbridge_cli.prompt import SYSTEM_PROMPT
+from langbridge_cli.roles import SYSTEM_PROMPT
 from langbridge_cli.tools.plan import read_handover
 from langbridge_cli.logging import (
     write_finish_log,
