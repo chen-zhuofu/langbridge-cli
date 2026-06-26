@@ -2,9 +2,11 @@
 
 An interactive coding-agent CLI backed by a Codex model.
 
-LangBridge runs a PM-led coding-agent loop. The PM can inspect the workspace,
-delegate implementation to specialist agents, resume previous JSON session
-history, and compact older context when the conversation gets long.
+LangBridge runs a PM-led, multi-agent coding loop. The PM inspects the
+workspace, plans the work, and delegates implementation to specialist agents
+(an L4 feature engineer and an L5 senior engineer), each verified by an L3 test
+engineer. It can resume previous JSON session history and compacts older context
+when the conversation gets long.
 
 ## Loop Engineering
 
@@ -13,35 +15,40 @@ model call, agents run in loops, and loops are nested inside loops. Each agent
 keeps thinking, calling tools, and reading results until it decides its job is
 done.
 
-There are two levels:
+There are three nested loops:
 
 - **Outer loop (PM):** The PM runs its own agentic loop. On each step it can
   inspect the workspace or delegate work, read the result, and decide the next
   move.
-- **Inner loop (L4 / L3):** When the PM delegates a task, that single delegation
-  is itself a full agentic loop. The L4 engineer reads files, edits code, runs
-  tests, fixes failures, and re-runs — many turns — before returning a report.
-  The same is true for the L3 test engineer.
+- **Inner loop (L4 ⇄ L3):** When the PM delegates a normal task, that single
+  delegation is itself a full agentic loop. The L4 engineer reads files, edits
+  code, runs tests, fixes failures, and re-runs — many turns — then L3 verifies
+  it, and the two trade review turns until the work passes.
+- **Nested Ralph loop (L5 ⇄ L3):** For a HARD task the PM delegates to the L5
+  senior engineer, which splits the work into technical sub-tasks and conquers
+  them one at a time, each verified by L3 — a loop of loops.
 
-So one PM action can trigger an entire L4 or L3 run. An "agent tool" is a loop,
+So one PM action can trigger an entire L4 or L5 run. An "agent tool" is a loop,
 not a single call.
 
-Both levels have safety brakes and quality controls:
+Every loop has safety brakes and quality controls:
 
-- **Step caps:** the PM loop is bounded by `MAX_AGENT_STEPS`; the specialist
-  loops are bounded by `MAX_SPECIALIST_AGENT_STEPS`. Neither can spin forever.
-- **Verification gate:** when L4 reports `READY_FOR_REVIEW`, the runtime
+- **Step caps:** the PM loop is bounded by `MAX_AGENT_STEPS` / `MAX_PM_LOOPS`;
+  one specialist turn by `MAX_SPECIALIST_AGENT_STEPS`; a review by
+  `MAX_L4_L3_TURNS`; the L5 Ralph loop by `MAX_L5_RALPH_TURNS`. None can spin
+  forever (wall-clock and context caps back these up).
+- **Verification gate:** when L4 or L5 reports `READY_FOR_REVIEW`, the runtime
   deterministically runs the L3 test engineer to verify the work before the PM
   accepts it.
-- **Recovery path:** if L3 returns `NEEDS_WORK`, that feedback is routed back
-  into a fresh L4 run so the engineer can address it.
+- **Recovery path:** if L3 returns `NEEDS_WORK`, that feedback goes back to the
+  same (still-alive) L4/L5 so it can address it.
 
 ```
-PM agentic loop                       (cap: MAX_AGENT_STEPS)
-  └─ ask_l4_engineer  ──►  L4 agentic loop   (cap: MAX_SPECIALIST_AGENT_STEPS)
-  └─ deterministic    ──►  L3 agentic loop   (cap: MAX_SPECIALIST_AGENT_STEPS)
-                              │
-                              └─ NEEDS_WORK ──► feedback back to L4
+PM agentic loop                          (caps: MAX_AGENT_STEPS, MAX_PM_LOOPS)
+  ├─ ask_l4_engineer ─► L4 ⇄ L3 review loop      (cap: MAX_L4_L3_TURNS)
+  │                       └─ NEEDS_WORK ─► back to L4;  push-back ─► 2-juror jury
+  └─ ask_l5_engineer ─► L5 Ralph loop            (cap: MAX_L5_RALPH_TURNS)
+                          └─ per sub-task: L5 ⇄ L3 review  (same jury rules)
 ```
 
 ### Outer-loop flavors: REPL, Ralph, and agentic
@@ -95,32 +102,42 @@ Pure Ralph often skips this entirely and just runs until a human stops it.
 LangBridge is an engineered, multi-agent take on the same idea:
 
 - **A dedicated planner, not "whoever runs first."** The PM owns planning and
-  routes scoped work to L4, instead of one generic agent bootstrapping the plan.
+  routes scoped work to L4 or L5, instead of one generic agent bootstrapping the
+  plan. (The L5 sub-task loop is itself a Ralph loop driven by a plan file.)
 - **Checkable status tokens instead of free text.** Reports start with fixed
-  lines like `L4_STATUS: READY_FOR_REVIEW` and the runtime emits
-  `PM_REVIEW_STATUS: OK` / `NEEDS_WORK`, so a loop can act on them deterministically.
-- **Bounded loops.** `MAX_AGENT_STEPS` and `MAX_SPECIALIST_AGENT_STEPS` stop the
-  loops from spinning forever — the guard a bare `while true` lacks.
+  lines like `L4_STATUS: READY_FOR_REVIEW` / `L5_STATUS: READY_FOR_REVIEW` and
+  the runtime emits `PM_REVIEW_STATUS: OK` / `NEEDS_WORK`, so a loop can act on
+  them deterministically.
+- **Bounded loops.** `MAX_AGENT_STEPS`, `MAX_SPECIALIST_AGENT_STEPS`,
+  `MAX_L4_L3_TURNS`, and `MAX_L5_RALPH_TURNS` stop the loops from spinning
+  forever — the guard a bare `while true` lacks.
 
-The CLI can call local tools in the current workspace:
+The PM works read-only on the workspace and delegates all writes to specialists.
+PM tools:
 
-- `list_dir`: list files and directories
-- `find_files`: find files and directories by name
-- `read_file`: read UTF-8 text files
-- `create_file`: create new UTF-8 text files
-- `edit_file`: edit UTF-8 text files with exact string replacement
-- `search_files`: search UTF-8 text files for exact text matches
-- `run_tests`: run Python unit tests with a timeout
-- `install_python_packages`: install Python packages with `uv add`
-- `ask_l4_engineer`: delegate scoped implementation work to an L4 feature
-  engineer, with PM-triggered L3 review when the work is ready
+- `list_dir`, `find_files`, `read_file`, `search_files`: inspect the workspace
+- `execute_program`: run a non-interactive program (e.g. bring the app up)
+- `read_webpage`: fetch the text of a URL (docs, an issue, reference material)
+- `update_plan`: write or update the `todo_list`
+- `ask_l4_engineer`: delegate a normal `component_task` to the L4 engineer
+- `ask_l5_engineer`: delegate a HARD `component_task` to the L5 senior engineer
 
-File tools are limited to the directory where you start the CLI. Write tools ask
-for approval before changing files or packages.
+Specialists get the write and test tools. L4 and L5 share `edit_file`,
+`create_file`, `delete_file`, `run_tests`, `execute_program`, and `read_skill`
+on top of the read-only file tools; L3 gets the read-only file tools plus
+`run_tests`. Both delegations trigger PM-driven L3 review when the work is ready.
+
+File tools are limited to the directory where you start the CLI. The write tools
+(`create_file`, `edit_file`, `delete_file`, `install_python_packages`) and the
+`ask_l4_engineer` / `ask_l5_engineer` delegations ask for approval first.
+
+On-demand skills: L4 and L5 see a catalog of skills (short playbooks) in their
+prompt and can call `read_skill(name)` to load one before starting. The bundled
+`karpathy` skill captures the team's engineering discipline.
 
 Each tool call includes a required `purpose` field: a short, user-visible
-sentence explaining why the agent is calling that tool. This is not private
-chain-of-thought; it powers the live thought display in the CLI and TUI.
+sentence explaining why the agent is calling that tool. It is not private
+chain-of-thought; it feeds the live thinking line in the TUI.
 
 The prompt uses `prompt_toolkit`, so deletion, cursor movement, and command
 history work like a normal interactive shell.
@@ -130,34 +147,31 @@ you can resume a previous session or start a new one.
 
 ## LangBridge Coding Team
 
-LangBridge is organized as a small coding-agent team. The current team has five
-roles:
+LangBridge is organized as a small coding-agent team. The current team has four
+active roles:
 
-- **PM**: defines what the product should look like and turns user needs into a
-  clear product brief.
-- **L4 feature implementation engineer**: implements features and the matching
+- **PM (outer loop)**: turns user needs into a `todo_list` of component-level
+  subtasks, routes each to L4 or L5, verifies the delivery, and tracks progress.
+- **L4 feature engineer**: implements a normal `component_task` and its focused
   unit tests.
-- **L3 test engineer**: checks the tests implemented by L4 and L5, reviews their
-  quality, and runs unit and end-to-end tests.
+- **L5 senior engineer**: takes a HARD `component_task`, plans it into
+  technical sub-tasks, and builds them one at a time (a Ralph loop).
+- **L3 test engineer**: verifies L4/L5 work — reviews code and test quality and
+  runs the tests. Shared inside both the L4 and L5 loops.
 
 We are hiring more agent roles. Current openings:
-- **Designer**: designs good UI interfaces and provides front-end specs.
-- **TL / L5 senior engineer**: plans the technical approach from the PM's product
-  definition, decides the components required, implements the framework or MVP,
-  and adds end-to-end tests. See the [Roadmap](#l5-senior-engineer-an-agentic-ralph-layer-between-pm-and-l4)
-  for the planned L5 design.
-- **PM**: cross-functional collaboration with design, data science, product, and
-  marketing.
-- **L6 engineer**: large-scale and high-concurrency system design,
-  implementation, and cross-team collaboration with other coding-agent teams.
+- **Designer**: UI design and front-end specs.
+- **PM (cross-functional)**: collaboration with design, data science, product,
+  and marketing.
+- **L6 engineer**: large-scale, high-concurrency system design and cross-team
+  collaboration with other coding-agent teams.
 - **Manager**: keeps agents aligned, unblocks work, and improves team execution.
 
-## Roadmap
+## How the team works
 
-The next milestone turns LangBridge into a fuller PM-led team with an **L5
-senior engineer**, an explicit turn state machine, a neutral dispute jury, and
-clear escalation and recovery paths. The full design is captured in
-`Thoughts.md`.
+The PM leads a multi-agent loop with machine-checkable status tokens, an in-loop
+L3 review, a neutral dispute jury, and clear escalation paths. The original
+design notes are in `Thoughts.md`.
 
 ### Roles and loops
 
@@ -165,50 +179,67 @@ clear escalation and recovery paths. The full design is captured in
   `component_task`s (product-level, not deeply technical), routes each to L4 or
   L5, verifies the delivery, and marks progress. The **last `component_task` is
   always an e2e test** for the whole product.
-- **L4:** implements a normal `component_task`.
-- **L5 (Ralph loop):** implements a hard `component_task` by divide-and-conquer.
-  It writes a `component_task_plan` (uniquely named per component) that splits
-  the work into `technical_sub_task`s; the **last one is always an integration
-  test**. Each Ralph turn re-runs a fresh L5 with the same prompt; the L5 reads
-  the plan and continues from the next unfinished sub-task. See
+- **L4:** implements a normal `component_task` and its tests.
+- **L5 (Ralph loop):** implements a HARD `component_task` by divide-and-conquer.
+  It writes a `component_task_plan` (one file per component) that splits the work
+  into `technical_sub_task`s; the **last one is always an integration test**.
+  Each Ralph turn spawns a fresh L5 that reads the plan and continues from the
+  next unfinished sub-task. See
   [Ralph loops](#outer-loop-flavors-repl-ralph-and-agentic).
-- **L3:** the tester, shared inside both the L4 and L5 loops.
+- **L3:** the tester, shared inside both the L4 and L5 review loops.
 
-### Worklogs (the memory)
+### Living agents vs. worklogs (memory)
 
-Each L4/L5 loop keeps a `shared_worklog` (the L4↔L3 or L5↔L3 conversation) plus
-private `l4_worklog` / `l5_worklog` / `l3_worklog`. A worker reads its own log
-plus the shared log; L3 reads its own log plus the shared log.
+Within one loop an agent stays **alive**: an L4 (or L5, or L3) keeps its full
+message history across the review rounds, so it remembers its own tool calls and
+the prior exchange. A new loop spawns a **fresh** agent with no memory of the
+previous one, and jurors are always fresh.
 
-### Turn routing (a small state machine)
+Worklogs are an audit/debug trail on disk, **not** the agents' working memory:
 
-Within a loop, exactly one side is active each turn, decided by the last token
-in `shared_worklog`:
+- **Per-instance worklog** — `agent-state/<role>/worklog/<run>/<role>_<n>.md`:
+  each agent instance's own record of what it received, the tools it called, what
+  came back, and its final report. A review can spin up several L3s (the reviewer
+  plus fresh jurors) and each PM round is a fresh PM, so every instance gets its
+  own file.
+- **Shared negotiation ledger** — `agent-state/l4/worklog/<run>/l34_share_<n>.md`
+  (and `l5/.../l45_share_<n>.md`): the L4↔L3 (or L5↔L3) conversation. Each turn
+  ends with a `WORKLOG_TOKEN`, which is what the loop routes on.
+- **PM state** — session history (`agent-state/pm/session-history/`), the
+  `todo_list` (`agent-state/pm/todo_list.md`), and L5 component plans
+  (`agent-state/l5/component-plans/`).
 
-- empty or `concern exist` → **worker's turn** (implement / fix)
-- `ready` or `push back` → **L3's turn** (test / re-judge)
+### Status tokens (machine-checkable, not prose)
 
-Three tokens keep the loop going (`ready`, `concern exist`, `push back`) and two
-end it (`pass`, and a `failure` outcome).
+Reports start with a fixed status line so a loop can act on them deterministically:
+
+- **L4 / L5:** `L4_STATUS:` / `L5_STATUS:` — one of `READY_FOR_REVIEW`,
+  `IN_PROGRESS`, `BLOCKED`, `PUSH_BACK`.
+- **L3:** `REVIEW_VERDICT:` — one of `PASS`, `FAIL`, `NEEDS_WORK`.
+- The runtime appends `PM_REVIEW_STATUS: OK | NEEDS_WORK` to a delivery, and the
+  PM ends each round with `BUG_STATUS: OPEN | NONE`, which drives the outer loop.
+
+The shared ledger tracks the negotiation with its own `WORKLOG_TOKEN`s: `ready`,
+`concern exist`, `push back`, `pass`, `needs pm` (escalate to PM), and `failure`.
 
 ### Disputes: a neutral jury, not a self-judge
 
-When the worker posts `push back` and L3 thinks it is unreasonable, L3 does
-**not** decide alone — that would be judging a complaint about its own test.
-Instead a **jury of 2 fresh, independent testers** each writes its own tests and
-votes:
+When the worker posts `push back` and L3 still objects, L3 does **not** decide
+alone — that would be judging a complaint about its own test. Instead a **jury of
+2 fresh, independent testers** each verifies the implementation and votes:
 
-- **Both vote yes** → `pass` (deliver, or mark the sub-task done).
+- **Both PASS** → `pass` (deliver, or mark the sub-task done).
 - **Otherwise** → `failure`.
 
 ### Limits, escalation, and recovery
 
-- **Three limits per loop:** context length (for LLM loops), a wall-clock
-  timeout, and a max loop count. Whichever trips first ends the loop as a
-  `failure`.
-- **Escalation:** an L4 failure goes to the PM (retry or reassign to L5); an L5
-  failure goes to the PM (re-scope or re-plan the `component_task`). When the PM
-  exhausts its own limits, it reports a clear blocker to the user.
+- **Bounded everywhere:** each loop has a step cap, a wall-clock timeout, and
+  (for LLM loops) a context cap — `MAX_AGENT_STEPS` / `MAX_PM_LOOPS` for the PM,
+  `MAX_SPECIALIST_AGENT_STEPS` for one specialist turn, `MAX_L4_L3_TURNS` for a
+  review, and `MAX_L5_RALPH_TURNS` for L5. Whichever trips first ends the loop.
+- **Escalation:** an L4 or L5 failure returns to the PM (retry, re-scope, or
+  reassign). When the PM exhausts its own limits, it reports a clear blocker to
+  the user.
 - **Final check:** after all `component_task`s pass, if the project is runnable
   the PM brings it up and debugs by hand. A bug found this way becomes a **new
   `component_task`**; a clean run ships to the user.
@@ -236,8 +267,9 @@ changes take effect immediately. Use `uv sync --reinstall-package langbridge-cli
 **Layout**:
 
 - **Welcome banner** (top): directory, current session, model, and version.
-- **Conversation**: your message is marked `✦`, the assistant reply `●`, and the
-  agent's live thoughts / tool actions appear inline in dim text.
+- **Conversation**: your message is marked `✦` and the assistant reply `●`. While
+  the agent works, its current thinking shows on a single live line that updates
+  in place and clears when the reply arrives.
 - **Status bar** (bottom): `model · state · cwd · git branch` on the left, and a
   **context-usage meter** `context X% (used/max)` on the right. The state shows
   `ready`, `thinking`, `working`, `paused`, `waiting for approval`, or `stopping`.
@@ -278,9 +310,9 @@ tool (e.g. `run_tests`) is mid-execution, Stop waits for that one tool to return
 before unwinding — it never leaves a write half-applied.
 
 **Approvals**: when auto-approve is off, the agent posts an inline approval
-request for PM delegate calls (`ask_l4_engineer`) and L4 write tools
-(`edit_file`, `create_file`, `delete_file`). Approve with `Ctrl+A` / `/approve`
-or deny with `Ctrl+D` / `/deny`.
+request for PM delegate calls (`ask_l4_engineer`, `ask_l5_engineer`) and for
+specialist write tools (`create_file`, `edit_file`, `delete_file`). Approve with
+`Ctrl+A` / `/approve` or deny with `Ctrl+D` / `/deny`.
 
 ### Plain CLI
 
@@ -323,7 +355,7 @@ echo "add a --verbose flag to the CLI" | uv run python -m langbridge_cli.headles
 
 ### Debug
 
-Print compact PM/L4/L3 output lines to stderr (one line per model response,
+Print compact PM/L4/L5/L3 output lines to stderr (one line per model response,
 `message` and `function_call` only):
 
 ```bash
