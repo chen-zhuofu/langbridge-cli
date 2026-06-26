@@ -15,8 +15,10 @@ from langbridge_cli.skills import skill_catalog_text
 from langbridge_cli.llm.tool_schema import strip_tool_purpose, with_tool_purpose
 from langbridge_cli.tools import execution, filesystem, skills, testing
 from langbridge_cli.persistence.agent_worklog import (
+    new_worklog_id,
     write_worklog_finish,
     write_worklog_observation,
+    write_worklog_received,
     write_worklog_step,
 )
 from langbridge_cli.agents.limits import now, over_context_budget, over_time_budget
@@ -176,9 +178,13 @@ class SpecialistSession:
         self.messages = [{"role": "system", "content": system_prompt}]
         self.tool_history = []
         self.step = 0
+        # This instance's own worklog file, so two L3s (or L4s) in the same review
+        # never write into one another's trace.
+        self.worklog_id = new_worklog_id(run_log_path, label)
 
     def send(self, user_prompt):
         self.messages.append({"role": "user", "content": user_prompt})
+        write_worklog_received(self.run_log_path, self.label, self.worklog_id, self.turn_id, user_prompt)
         start_time = now()
         for _ in range(MAX_SPECIALIST_AGENT_STEPS):
             control.checkpoint()
@@ -194,18 +200,18 @@ class SpecialistSession:
             if not tool_calls:
                 return self._finish(extract_output_text(output))
             print_step_trace(output, include_message=True, label=self.label, sink=self.trace_sink)
-            write_worklog_step(self.run_log_path, self.label, self.turn_id, self.step, output)
+            write_worklog_step(self.run_log_path, self.label, self.worklog_id, self.turn_id, self.step, output)
             self.messages.extend(output)
             for call in tool_calls:
                 tool_output = run_specialist_tool_call(call, self.tools, self.label, approval_callback=self.approval_callback)
                 self.tool_history.append({"call": call, "output": tool_output})
                 self.messages.append(tool_output)
-                write_worklog_observation(self.run_log_path, self.label, self.turn_id, self.step, tool_output)
+                write_worklog_observation(self.run_log_path, self.label, self.worklog_id, self.turn_id, self.step, tool_output)
             self.step += 1
         return self._finish(max_steps_report(self.label, self.tool_history))
 
     def _finish(self, report):
-        write_worklog_finish(self.run_log_path, self.label, self.turn_id, report)
+        write_worklog_finish(self.run_log_path, self.label, self.worklog_id, self.turn_id, report)
         return report
 
 

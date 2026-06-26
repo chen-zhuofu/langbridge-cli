@@ -1,8 +1,14 @@
-"""Per-agent worklog: each role's own always-on trace of what it did this loop.
+"""Per-agent worklog: each agent instance's own always-on trace of what it did.
 
 For every agent (PM, L3, L4, L5) we append a human-readable record of its
 reasoning, the tool calls it made (action), and what came back (observation),
-plus its final report. It is an audit/debug record, never read back by an agent.
+plus what it received and its final report. It is an audit/debug record, never
+read back by an agent.
+
+Each distinct agent instance gets its OWN file, so traces never pile together:
+one L4<->L3 review can spin up several L3s (the main reviewer, plus fresh jurors)
+and each PM round is a fresh, memoryless PM -- every one writes to a separate
+file. Files are grouped per run: agent-state/<role>/worklog/<run>/<role>_<n>.md.
 
 This is distinct from the two other records:
   - the shared worker<->L3 negotiation ledger (persistence/worklog.py), and
@@ -16,15 +22,36 @@ from langbridge_cli.llm.parse import extract_output_text, extract_reasoning_summ
 from langbridge_cli.llm.tool_schema import TOOL_PURPOSE_ARGUMENT
 
 
+# label -> (config dir attribute, file-name prefix)
 _WORKLOG_FILE_BY_LABEL = {
-    "PM agent": ("PM_WORKLOG_DIR", "pm_worklog.md"),
-    "L3 test engineer": ("L3_WORKLOG_DIR", "l3_worklog.md"),
-    "L4 engineer": ("L4_WORKLOG_DIR", "l4_worklog.md"),
-    "L5 engineer": ("L5_WORKLOG_DIR", "l5_worklog.md"),
+    "PM agent": ("PM_WORKLOG_DIR", "pm"),
+    "L3 test engineer": ("L3_WORKLOG_DIR", "l3"),
+    "L4 engineer": ("L4_WORKLOG_DIR", "l4"),
+    "L5 engineer": ("L5_WORKLOG_DIR", "l5"),
 }
 
+# (run, label) -> count of instances handed out so far. Resets naturally per run
+# because each run uses a fresh run_log_path, so instance numbers restart at 1.
+_INSTANCE_COUNTERS = {}
 
-def worklog_path(run_log_path, label):
+
+def new_worklog_id(run_log_path, label):
+    """Reserve a fresh per-instance worklog id (1-based) for one new agent.
+
+    Call this once when an agent instance is created; pass the returned id to
+    every write_worklog_* call for that instance so they all land in one file.
+    Returns None when there is no active run (e.g. unit tests), making the
+    writers no-ops.
+    """
+    if run_log_path is None or label not in _WORKLOG_FILE_BY_LABEL:
+        return None
+    key = (str(run_log_path), label)
+    next_id = _INSTANCE_COUNTERS.get(key, 0) + 1
+    _INSTANCE_COUNTERS[key] = next_id
+    return next_id
+
+
+def worklog_path(run_log_path, label, instance_id=None):
     # No active run (e.g. unit tests passing run_log_path=None) -> no-op, so the writer
     # never litters when there is no real loop in flight.
     if run_log_path is None:
@@ -32,12 +59,25 @@ def worklog_path(run_log_path, label):
     entry = _WORKLOG_FILE_BY_LABEL.get(label)
     if entry is None:
         return None
-    dir_attr, name = entry
-    return getattr(config, dir_attr) / name
+    dir_attr, prefix = entry
+    run_dir = getattr(config, dir_attr) / run_log_path.stem
+    name = f"{prefix}.md" if instance_id is None else f"{prefix}_{instance_id}.md"
+    return run_dir / name
 
 
-def write_worklog_step(run_log_path, label, turn_id, step, output):
-    path = worklog_path(run_log_path, label)
+def write_worklog_received(run_log_path, label, instance_id, turn_id, text):
+    # The incoming message this agent was handed (the user task for the PM, or the
+    # other side's report/feedback for a specialist). Logged so each worklog reads
+    # as a full exchange — what it received, then what it did about it — not just
+    # the agent's own half.
+    path = worklog_path(run_log_path, label, instance_id)
+    if path is None:
+        return
+    _append(path, [f"### [{label}] turn {turn_id} \u00b7 RECEIVED", "", text.strip(), ""])
+
+
+def write_worklog_step(run_log_path, label, instance_id, turn_id, step, output):
+    path = worklog_path(run_log_path, label, instance_id)
     if path is None:
         return
 
@@ -55,8 +95,8 @@ def write_worklog_step(run_log_path, label, turn_id, step, output):
     _append(path, lines)
 
 
-def write_worklog_observation(run_log_path, label, turn_id, step, tool_output):
-    path = worklog_path(run_log_path, label)
+def write_worklog_observation(run_log_path, label, instance_id, turn_id, step, tool_output):
+    path = worklog_path(run_log_path, label, instance_id)
     if path is None:
         return
 
@@ -71,8 +111,8 @@ def write_worklog_observation(run_log_path, label, turn_id, step, tool_output):
     _append(path, lines)
 
 
-def write_worklog_finish(run_log_path, label, turn_id, finished):
-    path = worklog_path(run_log_path, label)
+def write_worklog_finish(run_log_path, label, instance_id, turn_id, finished):
+    path = worklog_path(run_log_path, label, instance_id)
     if path is None:
         return
 

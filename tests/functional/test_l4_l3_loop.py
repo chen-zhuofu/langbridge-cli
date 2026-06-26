@@ -122,7 +122,7 @@ def test_worklog_records_negotiation(tmp_path, monkeypatch):
         run_log_path=run_log,
     )
 
-    worklog = tmp_path / "l34_share_worklog.md"
+    worklog = tmp_path / "run" / "l34_share_1.md"
     assert worklog.exists()
     text = worklog.read_text(encoding="utf-8")
     assert "L4<->L3 negotiation: build" in text

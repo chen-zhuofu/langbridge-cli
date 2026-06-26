@@ -118,7 +118,7 @@ def test_l5_push_back_goes_to_jury_and_passes(tmp_path, monkeypatch):
 
     # The sub-task passes only because the 2-juror dispute cleared L5's push-back.
     assert "PM_REVIEW_STATUS: OK" in output
-    worklog = (tmp_path / "l45_share_worklog.md").read_text(encoding="utf-8")
+    worklog = (tmp_path / "run" / "l45_share_1.md").read_text(encoding="utf-8")
     assert "WORKLOG_TOKEN: push back" in worklog
     assert "Dispute jury" in worklog
     assert "DISPUTE_JURY_RESULT: PASS" in worklog
@@ -143,7 +143,7 @@ def test_l5_records_the_worklog(tmp_path, monkeypatch):
     run_log = tmp_path / "run.json"
     run_l5_component("key", "model", {"task": "hard feature"}, run_log_path=run_log)
 
-    text = (tmp_path / "l45_share_worklog.md").read_text(encoding="utf-8")
+    text = (tmp_path / "run" / "l45_share_1.md").read_text(encoding="utf-8")
     assert "L5 component: hard feature" in text
     assert "WORKLOG_TOKEN: ready" in text
     assert "WORKLOG_TOKEN: pass" in text

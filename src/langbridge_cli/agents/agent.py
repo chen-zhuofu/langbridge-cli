@@ -29,8 +29,10 @@ from langbridge_cli.llm.parse import extract_output_text, print_step_trace
 from langbridge_cli.llm.tool_schema import strip_tool_purpose
 from langbridge_cli.tools import MAIN_TOOL_SCHEMAS, MAIN_TOOLS
 from langbridge_cli.persistence.agent_worklog import (
+    new_worklog_id,
     write_worklog_finish,
     write_worklog_observation,
+    write_worklog_received,
     write_worklog_step,
 )
 from langbridge_cli.persistence.worklog import append_worklog_entry, start_worklog
@@ -100,13 +102,18 @@ def run_agent(
     approval_callback=None,
 ):
     write_input_log(run_log_path, turn_id, input) # write current message into log
+    # Each PM round starts fresh with no memory of earlier rounds, so it is a new
+    # PM instance and gets its own worklog file.
+    worklog_id = new_worklog_id(run_log_path, "PM agent")
+    received = next((message.get("content", "") for message in reversed(input) if message.get("role") == "user"), "")
+    write_worklog_received(run_log_path, "PM agent", worklog_id, turn_id, str(received))
     start_time = now()
     for step in range(MAX_AGENT_STEPS):
         control.checkpoint()
         if over_time_budget(start_time, MAX_AGENT_SECONDS):
-            return finish_pm(input, "Agent stopped because it ran out of time.", run_log_path, turn_id, print_reply)
+            return finish_pm(input, "Agent stopped because it ran out of time.", run_log_path, turn_id, print_reply, worklog_id)
         if over_context_budget(input, MAX_AGENT_CONTEXT_TOKENS):
-            return finish_pm(input, "Agent stopped because it exceeded the context budget.", run_log_path, turn_id, print_reply)
+            return finish_pm(input, "Agent stopped because it exceeded the context budget.", run_log_path, turn_id, print_reply, worklog_id)
         step_response = control.run_interruptible(lambda: create_response(api_key, model, input)).get("output", [])
         tool_calls = [item for item in step_response if item.get("type") == "function_call"]
         print_step_trace(step_response, include_message=bool(tool_calls), label="PM agent", sink=trace_sink)
@@ -114,21 +121,21 @@ def run_agent(
         if tool_calls:
             input.extend(step_response)
             write_tool_calls_log(run_log_path, turn_id, step, step_response) # write step_response or socalled "action" into log
-            write_worklog_step(run_log_path, "PM agent", turn_id, step, step_response)
+            write_worklog_step(run_log_path, "PM agent", worklog_id, turn_id, step, step_response)
             for call in tool_calls:
                 tool_output = run_tool_call(call, api_key, model, trace_sink, approval_callback, run_log_path, turn_id)
                 input.append(tool_output)
                 write_tool_calls_result_log(run_log_path, turn_id, step, tool_output) # write tool_output or socalled "observation" into log
-                write_worklog_observation(run_log_path, "PM agent", turn_id, step, tool_output)
+                write_worklog_observation(run_log_path, "PM agent", worklog_id, turn_id, step, tool_output)
         else:
-            return finish_pm(input, extract_output_text(step_response), run_log_path, turn_id, print_reply)
-    return finish_pm(input, "Agent stopped because it reached the maximum tool-call steps.", run_log_path, turn_id, print_reply)
+            return finish_pm(input, extract_output_text(step_response), run_log_path, turn_id, print_reply, worklog_id)
+    return finish_pm(input, "Agent stopped because it reached the maximum tool-call steps.", run_log_path, turn_id, print_reply, worklog_id)
 
 
-def finish_pm(input, finished, run_log_path, turn_id, print_reply):
+def finish_pm(input, finished, run_log_path, turn_id, print_reply, worklog_id=None):
     input.append({"role": "assistant", "content": finished})
     write_finish_log(run_log_path, turn_id, finished)
-    write_worklog_finish(run_log_path, "PM agent", turn_id, finished)
+    write_worklog_finish(run_log_path, "PM agent", worklog_id, turn_id, finished)
     if print_reply:
         print(f"\n{finished}\n")
     return finished

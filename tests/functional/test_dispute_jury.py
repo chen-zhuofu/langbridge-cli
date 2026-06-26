@@ -78,7 +78,7 @@ def test_worklog_records_push_back_and_jury(tmp_path, monkeypatch):
     run_log = tmp_path / "run.json"
     run_l4_component("key", "model", {"task": "build", "context": "repo"}, run_log_path=run_log)
 
-    text = (tmp_path / "l34_share_worklog.md").read_text(encoding="utf-8")
+    text = (tmp_path / "run" / "l34_share_1.md").read_text(encoding="utf-8")
     assert "WORKLOG_TOKEN: push back" in text
     assert "Dispute jury" in text
     assert "WORKLOG_TOKEN: pass" in text
