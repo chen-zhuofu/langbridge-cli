@@ -11,8 +11,9 @@ from langbridge_cli.config import (
 from langbridge_cli.llm.debug import print_llm_request, print_llm_response
 from langbridge_cli.llm.parse import extract_output_text, print_step_trace
 from langbridge_cli.agents.roles import L3_TEST_ENGINEER_PROMPT, L4_ENGINEER_PROMPT, L5_ENGINEER_PROMPT
+from langbridge_cli.skills import skill_catalog_text
 from langbridge_cli.llm.tool_schema import strip_tool_purpose, with_tool_purpose
-from langbridge_cli.tools import execution, filesystem, testing
+from langbridge_cli.tools import execution, filesystem, skills, testing
 from langbridge_cli.persistence.agent_worklog import (
     write_worklog_finish,
     write_worklog_observation,
@@ -42,17 +43,18 @@ L4_TOOL_NAMES = {
     "delete_file",
     "run_tests",
     "execute_program",
+    "read_skill",
 }
 L4_TOOL_SCHEMAS = with_tool_purpose(
     [
         schema
-        for schema in filesystem.TOOL_SCHEMAS + testing.TOOL_SCHEMAS + execution.TOOL_SCHEMAS
+        for schema in filesystem.TOOL_SCHEMAS + testing.TOOL_SCHEMAS + execution.TOOL_SCHEMAS + skills.TOOL_SCHEMAS
         if schema["name"] in L4_TOOL_NAMES
     ]
 )
 L4_TOOLS = {
     name: tool
-    for name, tool in (filesystem.TOOLS | testing.TOOLS | execution.TOOLS).items()
+    for name, tool in (filesystem.TOOLS | testing.TOOLS | execution.TOOLS | skills.TOOLS).items()
     if name in L4_TOOL_NAMES
 }
 L4_WRITE_TOOLS = {"create_file", "delete_file", "edit_file"}
@@ -61,6 +63,17 @@ L4_WRITE_TOOLS = {"create_file", "delete_file", "edit_file"}
 L5_TOOL_SCHEMAS = L4_TOOL_SCHEMAS
 L5_TOOLS = L4_TOOLS
 L5_WRITE_TOOLS = L4_WRITE_TOOLS
+
+# The implementers (L4/L5) can pull skills on demand. We list the catalog in their
+# system prompt and give them the read_skill tool to load one when it fits. L3 and
+# the PM are unchanged.
+_SKILLS_NOTE = (
+    "You have skills available: short playbooks of guidelines for common kinds of "
+    "work. When one fits the current task, call read_skill(name) to load it and "
+    "follow it before you start. Available skills:\n" + skill_catalog_text()
+)
+L4_SYSTEM_PROMPT = L4_ENGINEER_PROMPT + "\n\n" + _SKILLS_NOTE
+L5_SYSTEM_PROMPT = L5_ENGINEER_PROMPT + "\n\n" + _SKILLS_NOTE
 
 
 # The run_lN_* helpers send ONE turn to a specialist. Pass a live `session` to keep
@@ -215,14 +228,14 @@ def new_l3_session(api_key, model, trace_sink=None, run_log_path=None, turn_id=N
 
 def new_l4_session(api_key, model, trace_sink=None, approval_callback=None, run_log_path=None, turn_id=None):
     return SpecialistSession(
-        api_key, model, L4_ENGINEER_PROMPT, L4_TOOL_SCHEMAS, L4_TOOLS, "L4 engineer",
+        api_key, model, L4_SYSTEM_PROMPT, L4_TOOL_SCHEMAS, L4_TOOLS, "L4 engineer",
         trace_sink=trace_sink, approval_callback=approval_callback, run_log_path=run_log_path, turn_id=turn_id,
     )
 
 
 def new_l5_session(api_key, model, trace_sink=None, approval_callback=None, run_log_path=None, turn_id=None):
     return SpecialistSession(
-        api_key, model, L5_ENGINEER_PROMPT, L5_TOOL_SCHEMAS, L5_TOOLS, "L5 engineer",
+        api_key, model, L5_SYSTEM_PROMPT, L5_TOOL_SCHEMAS, L5_TOOLS, "L5 engineer",
         trace_sink=trace_sink, approval_callback=approval_callback, run_log_path=run_log_path, turn_id=turn_id,
     )
 

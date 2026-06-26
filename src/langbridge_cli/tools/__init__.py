@@ -1,4 +1,4 @@
-from langbridge_cli.tools import agents, execution, filesystem, packages, plan, testing, web
+from langbridge_cli.tools import agents, execution, filesystem, packages, plan, skills, testing, web
 from langbridge_cli.llm.tool_schema import with_tool_purpose
 
 TOOL_SCHEMAS = with_tool_purpose(
@@ -9,8 +9,9 @@ TOOL_SCHEMAS = with_tool_purpose(
     + agents.TOOL_SCHEMAS
     + plan.TOOL_SCHEMAS
     + web.TOOL_SCHEMAS
+    + skills.TOOL_SCHEMAS
 )
-TOOLS = filesystem.TOOLS | testing.TOOLS | packages.TOOLS | execution.TOOLS | agents.TOOLS | plan.TOOLS | web.TOOLS
+TOOLS = filesystem.TOOLS | testing.TOOLS | packages.TOOLS | execution.TOOLS | agents.TOOLS | plan.TOOLS | web.TOOLS | skills.TOOLS
 
 MAIN_TOOL_NAMES = {"list_dir", "find_files", "read_file", "search_files", "execute_program", "read_webpage", "ask_l4_engineer", "ask_l5_engineer", "update_plan"}
 MAIN_TOOL_SCHEMAS = with_tool_purpose(
