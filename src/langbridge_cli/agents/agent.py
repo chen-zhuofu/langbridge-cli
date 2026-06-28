@@ -19,6 +19,7 @@ from langbridge_cli.config import (
 )
 from langbridge_cli.llm.debug import print_llm_request, print_llm_response
 from langbridge_cli.agents.roles import SYSTEM_PROMPT
+from langbridge_cli import policy
 from langbridge_cli.tools.plan import read_todo_list
 from langbridge_cli.persistence.logging import (
     write_finish_log,
@@ -63,7 +64,7 @@ def run_pm_loop(
     fresh conversation.
     """
     if messages is None:
-        messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+        messages = [{"role": "system", "content": policy.apply("pm", SYSTEM_PROMPT)}]
     messages.append({"role": "user", "content": pm_round_prompt(target, read_todo_list(run_log_path))})
     finished = ""
     start_time = now()

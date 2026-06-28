@@ -12,6 +12,7 @@ from langbridge_cli.llm.debug import print_llm_request, print_llm_response
 from langbridge_cli.llm.parse import extract_output_text, print_step_trace
 from langbridge_cli.agents.roles import L3_TEST_ENGINEER_PROMPT, L4_ENGINEER_PROMPT, L5_ENGINEER_PROMPT
 from langbridge_cli.skills import skill_catalog_text
+from langbridge_cli import policy
 from langbridge_cli.llm.tool_schema import strip_tool_purpose, with_tool_purpose
 from langbridge_cli.tools import execution, filesystem, skills, testing
 from langbridge_cli.persistence.agent_worklog import (
@@ -67,15 +68,38 @@ L5_TOOLS = L4_TOOLS
 L5_WRITE_TOOLS = L4_WRITE_TOOLS
 
 # The implementers (L4/L5) can pull skills on demand. We list the catalog in their
-# system prompt and give them the read_skill tool to load one when it fits. L3 and
-# the PM are unchanged.
-_SKILLS_NOTE = (
-    "You have skills available: short playbooks of guidelines for common kinds of "
-    "work. When one fits the current task, call read_skill(name) to load it and "
-    "follow it before you start. Available skills:\n" + skill_catalog_text()
-)
-L4_SYSTEM_PROMPT = L4_ENGINEER_PROMPT + "\n\n" + _SKILLS_NOTE
-L5_SYSTEM_PROMPT = L5_ENGINEER_PROMPT + "\n\n" + _SKILLS_NOTE
+# system prompt and give them the read_skill tool to load one when it fits. The
+# catalog and the evolver-learned guidance are read fresh per session (not frozen
+# at import) so a new policy/skill checkpoint takes effect on the next run.
+def _skills_note():
+    catalog = skill_catalog_text()
+    if not catalog:
+        return ""
+    return (
+        "You have skills available: short playbooks of guidelines for common kinds "
+        "of work. When one fits the current task, call read_skill(name) to load it "
+        "and follow it before you start. Available skills:\n" + catalog
+    )
+
+
+def l4_system_prompt():
+    base = L4_ENGINEER_PROMPT
+    note = _skills_note()
+    if note:
+        base += "\n\n" + note
+    return policy.apply("l4", base)
+
+
+def l5_system_prompt():
+    base = L5_ENGINEER_PROMPT
+    note = _skills_note()
+    if note:
+        base += "\n\n" + note
+    return policy.apply("l5", base)
+
+
+def l3_system_prompt():
+    return policy.apply("l3", L3_TEST_ENGINEER_PROMPT)
 
 
 # The run_lN_* helpers send ONE turn to a specialist. Pass a live `session` to keep
@@ -227,21 +251,21 @@ def run_specialist_agent(api_key, model, system_prompt, user_prompt, tool_schema
 
 def new_l3_session(api_key, model, trace_sink=None, run_log_path=None, turn_id=None):
     return SpecialistSession(
-        api_key, model, L3_TEST_ENGINEER_PROMPT, L3_TOOL_SCHEMAS, L3_TOOLS, "L3 test engineer",
+        api_key, model, l3_system_prompt(), L3_TOOL_SCHEMAS, L3_TOOLS, "L3 test engineer",
         trace_sink=trace_sink, run_log_path=run_log_path, turn_id=turn_id,
     )
 
 
 def new_l4_session(api_key, model, trace_sink=None, approval_callback=None, run_log_path=None, turn_id=None):
     return SpecialistSession(
-        api_key, model, L4_SYSTEM_PROMPT, L4_TOOL_SCHEMAS, L4_TOOLS, "L4 engineer",
+        api_key, model, l4_system_prompt(), L4_TOOL_SCHEMAS, L4_TOOLS, "L4 engineer",
         trace_sink=trace_sink, approval_callback=approval_callback, run_log_path=run_log_path, turn_id=turn_id,
     )
 
 
 def new_l5_session(api_key, model, trace_sink=None, approval_callback=None, run_log_path=None, turn_id=None):
     return SpecialistSession(
-        api_key, model, L5_SYSTEM_PROMPT, L5_TOOL_SCHEMAS, L5_TOOLS, "L5 engineer",
+        api_key, model, l5_system_prompt(), L5_TOOL_SCHEMAS, L5_TOOLS, "L5 engineer",
         trace_sink=trace_sink, approval_callback=approval_callback, run_log_path=run_log_path, turn_id=turn_id,
     )
 

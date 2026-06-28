@@ -1,20 +1,34 @@
-"""cli.py — run the multi-role eval harness.
+"""cli.py — run the evals and the evolver.
 
-Examples (see training/README.md):
+Examples (after setting the target repo + specs, see training/README.md):
 
-  python -m langbridge_cli.training.cli eval --role l4 --limit 5
-  python -m langbridge_cli.training.cli eval --role l3 --source swebench
+  # Evaluate one role on the spec set under the current policy:
+  LANGBRIDGE_TARGET_REPO=./arrow LANGBRIDGE_SPECS_DIR=training/specs \
+    python -m langbridge_cli.training.cli eval --role l4 --limit 5
+
+  # Evaluate against a frozen checkpoint instead of the live policy:
+  LANGBRIDGE_POLICY_DIR=training/policy/checkpoints/epoch1 \
+    python -m langbridge_cli.training.cli eval --role l3
+
+  # Run the evolver (self-play) for one epoch over the spec set:
+  python -m langbridge_cli.training.cli train --epochs 1 --batch-size 2
 """
 import argparse
 import os
 
 from langbridge_cli import policy
-from langbridge_cli.config import DEFAULT_MODEL
-from langbridge_cli.training import bench, metrics, swebench
+from langbridge_cli.config import DEFAULT_MODEL, load_api_key
+from langbridge_cli.training import bench, evolver, metrics, swebench
 from langbridge_cli.training.evals import agents_adapter, runner
 
 
 def _build(args, model):
+    """Return (specs_for(hard), grade, calls) for the chosen task source.
+
+    Default source is the SWE-bench-style pytest dataset under evals/dataset/
+    (the validated instances "he" built). `--source local` uses a local git repo
+    + cached specs instead (see bench.py).
+    """
     if getattr(args, "source", "swebench") == "local":
         grade = bench.make_git_grader()
         calls = agents_adapter.make_callables(model=model)
@@ -56,11 +70,9 @@ def cmd_eval(args):
     else:
         raise SystemExit(f"unknown role {args.role}")
 
-    path = metrics.record_result(
-        args.role, rows, model=model,
-        dataset=os.environ.get("LANGBRIDGE_TARGET_REPO", ""),
-        policy_version=p.get("version"),
-    )
+    path = metrics.record_result(args.role, rows, model=model,
+                                 dataset=os.environ.get("LANGBRIDGE_TARGET_REPO", ""),
+                                 policy_version=p.get("version"))
     metrics.write_leaderboard()
     print(f"metrics: {metrics.compute_metrics(args.role, rows)}")
     print(f"recorded: {path}")
@@ -78,6 +90,22 @@ def cmd_specs(args):
             print(f"  {tid}: {st}")
 
 
+def cmd_train(args):
+    api_key = load_api_key()
+    model = args.model or os.environ.get("LANGBRIDGE_MODEL", DEFAULT_MODEL)
+    evolver_model = args.evolver_model or model
+    specs_for, grade, calls = _build(args, model)
+    evolve_fn = evolver.make_evolve_fn(api_key, evolver_model)
+    specs = _limit(specs_for(), args)
+    results = evolver.run(
+        specs, loop_fn=calls["loop_fn"], grade=grade, evolve_fn=evolve_fn,
+        epochs=args.epochs, batch_size=args.batch_size,
+        do_gate=not args.no_gate, checkpoint_every=args.checkpoint_every,
+    )
+    accepted = sum(1 for r in results if r["accepted"])
+    print(f"batches: {len(results)}  accepted: {accepted}  policy v{policy.load().get('version')}")
+
+
 def main():
     ap = argparse.ArgumentParser(prog="langbridge-train")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -93,6 +121,17 @@ def main():
     pe.add_argument("--model", default=None)
     pe.add_argument("--limit", type=int, default=0)
     pe.set_defaults(func=cmd_eval)
+
+    pt = sub.add_parser("train", help="run the evolver (self-play)")
+    pt.add_argument("--source", default="swebench", choices=["swebench", "local"])
+    pt.add_argument("--model", default=None, help="agent model")
+    pt.add_argument("--evolver-model", default=None, help="model for the evolver itself")
+    pt.add_argument("--epochs", type=int, default=1)
+    pt.add_argument("--batch-size", type=int, default=2)
+    pt.add_argument("--no-gate", action="store_true", help="skip the acceptance gate")
+    pt.add_argument("--checkpoint-every", default="batch", choices=["batch", "epoch"])
+    pt.add_argument("--limit", type=int, default=0)
+    pt.set_defaults(func=cmd_train)
 
     args = ap.parse_args()
     args.func(args)
