@@ -36,8 +36,8 @@ trace mining and policy optimization are still in development** — eval hooks e
 (`eval --role l5`, `eval --role pm`), but `train` does not consume L5 Ralph or PM
 outer-loop traces yet.
 
-Per-role **eval** (hidden **FAIL_TO_PASS / PASS_TO_PASS** tests, SWE-bench-style
-dataset in `evals/dataset/`):
+Per-role **eval** (hidden **FAIL_TO_PASS / PASS_TO_PASS** tests, **langbridge-bench**
+specs in `evals/langbridge-bench/specs/`):
 
 ```bash
 # L4 implementer only
@@ -238,7 +238,7 @@ alone — that would be judging a complaint about its own test. Instead a **jury
 
 The `evals/` tree measures Langbridge on real issues and builds new task data.
 
-### SWE-bench e2e (`evals/swebench/`)
+### SWE-bench e2e (`evals/swe-bench/`)
 
 End-to-end benchmark on published SWE-bench instances: checkout the repo at
 `base_commit`, run the headless CLI on the issue text, capture `git diff` as the
@@ -246,31 +246,31 @@ patch, then grade with the official harness (hidden tests in Docker).
 
 ```bash
 # Stage 1 — generate predictions (agent inside the official SWE-bench image)
-sg docker -c "uv run python evals/swebench/run_eval_docker.py --difficulty lite --count 10"
+sg docker -c "uv run python evals/swe-bench/run_eval_docker.py --difficulty lite --count 10"
 
-# Stage 2 — grade (from evals/swebench/)
-cd evals/swebench && uv run python -m swebench.harness.run_evaluation \
+# Stage 2 — grade (from evals/swe-bench/)
+cd evals/swe-bench && uv run python -m swebench.harness.run_evaluation \
   --dataset_name princeton-nlp/SWE-bench_Lite \
   --predictions_path out/predictions.jsonl \
   --max_workers 4 --run_id langbridge-l4-lite
 ```
 
 Datasets: `lite` (~300), `verified` (500), `pro` (hard). Details and Pro caveats:
-`evals/swebench/README.md`.
+`evals/swe-bench/README.md`.
 
-### Dataset pipeline (`evals/dataset/`)
+### langbridge-bench (`evals/langbridge-bench/`)
 
-Build **SWE-bench-style** training instances from GitHub: collect merged PRs that
-link an issue and change both code and tests, run pre-fix / post-fix reference
-tests, and keep only tasks with a **FAIL_TO_PASS** signal.
+Self-built benchmark from GitHub PRs: collect merged PRs, validate with reference
+tests, then materialize **one JSON per task** under `instances/` and `specs/`.
 
 ```bash
-uv run python evals/dataset/collect_prs.py --repo pytest-dev/pytest --max-per-repo 5
-uv run python evals/dataset/reference_test.py --run
+uv run python evals/langbridge-bench/collect_prs.py --repo pytest-dev/pytest --max-per-repo 5
+uv run python evals/langbridge-bench/reference_test.py --run
+uv run python evals/langbridge-bench/materialize.py
 ```
 
-A small validated sample ships in `evals/dataset/sample_validated.jsonl`. Pipeline
-steps and scaling notes: `evals/dataset/README.md`.
+Training eval/train reads `evals/langbridge-bench/specs/` by default. See
+`evals/langbridge-bench/README.md` and `evals/README.md`.
 
 ## Run
 

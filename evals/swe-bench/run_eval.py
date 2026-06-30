@@ -6,7 +6,7 @@ For each SWE-bench instance this:
   3. captures `git diff` as the model_patch,
   4. writes a predictions.jsonl the official swebench grader can consume.
 
-Grading is a separate step (needs Docker); see evals/swebench/README.md.
+Grading is a separate step (needs Docker); see evals/swe-bench/README.md.
 """
 
 import argparse
@@ -184,7 +184,7 @@ def main():
     )
     parser.add_argument("--model", default=os.environ.get("LANGBRIDGE_MODEL", ""))
     parser.add_argument("--timeout", type=int, default=900, help="Per-instance agent timeout (s).")
-    parser.add_argument("--out", default=str(PROJECT_ROOT / "evals" / "swebench" / "out"))
+    parser.add_argument("--out", default=str(PROJECT_ROOT / "evals" / "swe-bench" / "out"))
     args = parser.parse_args()
 
     if not os.environ.get("OPENAI_API_KEY") and not (Path.home() / ".langbridge" / "config.json").exists():
@@ -225,7 +225,7 @@ def main():
 
     resolved = sum(1 for summary in summaries if summary["has_patch"])
     print(f"\nWrote {predictions_path}")
-    print(f"Produced a patch for {resolved}/{len(summaries)} instances. Grade with evals/swebench/README.md.")
+    print(f"Produced a patch for {resolved}/{len(summaries)} instances. Grade with evals/swe-bench/README.md.")
 
 
 if __name__ == "__main__":

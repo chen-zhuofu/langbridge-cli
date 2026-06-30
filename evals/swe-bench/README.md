@@ -29,7 +29,7 @@ Each benchmark = Stage 1 (generate predictions) + Stage 2 (grade). Bump
 
 ```bash
 # Stage 1 — generate
-sg docker -c "uv run python evals/swebench/run_eval_docker.py --difficulty lite --count 10"
+sg docker -c "uv run python evals/swe-bench/run_eval_docker.py --difficulty lite --count 10"
 # Stage 2 — grade (run from evals/swebench so grader logs land in the eval area)
 cd evals/swebench && uv run python -m swebench.harness.run_evaluation \
   --dataset_name princeton-nlp/SWE-bench_Lite \
@@ -41,7 +41,7 @@ cd evals/swebench && uv run python -m swebench.harness.run_evaluation \
 
 ```bash
 # Stage 1 — generate
-sg docker -c "uv run python evals/swebench/run_eval_docker.py --difficulty verified --count 10"
+sg docker -c "uv run python evals/swe-bench/run_eval_docker.py --difficulty verified --count 10"
 # Stage 2 — grade (run from evals/swebench so grader logs land in the eval area)
 cd evals/swebench && uv run python -m swebench.harness.run_evaluation \
   --dataset_name princeton-nlp/SWE-bench_Verified \
@@ -53,7 +53,7 @@ cd evals/swebench && uv run python -m swebench.harness.run_evaluation \
 
 ```bash
 # Stage 1 — generate (host runner; see Pro caveat below)
-uv run python evals/swebench/run_eval.py --difficulty pro --count 10
+uv run python evals/swe-bench/run_eval.py --difficulty pro --count 10
 # Stage 2 — grade with Scale's harness, not the swebench grader
 # https://github.com/scaleapi/SWE-bench_Pro-os
 ```
@@ -72,7 +72,7 @@ There are two runners. Prefer the Docker one.
 #### Recommended: agent-inside-image (sandbox, Docker)
 
 ```bash
-sg docker -c "uv run python evals/swebench/run_eval_docker.py --count 10"
+sg docker -c "uv run python evals/swe-bench/run_eval_docker.py --count 10"
 ```
 
 This runs the agent **inside each instance's official SWE-bench image** — the
@@ -85,7 +85,7 @@ its own fix. Per instance it:
    dep the headless path needs; numpy/textual/prompt_toolkit are TUI-only),
 4. runs the headless agent in `/testbed` with the issue text on stdin,
 5. captures `git diff` as the `model_patch`,
-6. writes `evals/swebench/out/predictions.jsonl` and `run_summary.json`.
+6. writes `evals/swe-bench/out/predictions.jsonl` and `run_summary.json`.
 
 The agent runs under the container's `testbed` Python (3.9). Our code is 3.9
 compatible, so `run_tests` (which uses `sys.executable -m pytest`) targets the
@@ -98,7 +98,7 @@ Options: `--dataset`, `--split`, `--count`, `--namespace`, `--model`,
 #### Legacy: host checkout (no Docker, no deps)
 
 ```bash
-uv run python evals/swebench/run_eval.py --count 10
+uv run python evals/swe-bench/run_eval.py --count 10
 ```
 
 Same idea but it shallow-fetches the repo onto the host **without installing
@@ -111,7 +111,7 @@ Eval artifacts (session logs, `todo_list.md`) are redirected out of the repo via
 ### Stage 2 — grade (needs Docker)
 
 The official SWE-bench grader runs each repo's hidden tests inside per-instance
-Docker images. Install Docker first, then run it **from `evals/swebench/`** so the
+Docker images. Install Docker first, then run it **from `evals/swe-bench/`** so the
 grader's `logs/run_evaluation/` land in the eval area instead of the repo root:
 
 ```bash
@@ -124,7 +124,7 @@ cd evals/swebench && uv run python -m swebench.harness.run_evaluation \
 
 This writes a report with how many instances were **resolved** (FAIL_TO_PASS now
 pass and PASS_TO_PASS still pass). The per-instance logs go to
-`evals/swebench/logs/run_evaluation/<run_id>/...` (gitignored).
+`evals/swe-bench/logs/run_evaluation/<run_id>/...` (gitignored).
 
 ## Known limitation (legacy host runner only)
 

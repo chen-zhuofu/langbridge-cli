@@ -18,7 +18,7 @@ import os
 
 from langbridge_cli import policy
 from langbridge_cli.config import DEFAULT_MODEL, load_api_key
-from langbridge_cli.training import bench, evolver, metrics, swebench
+from langbridge_cli.training import bench, evolver, langbridge_bench, metrics
 from langbridge_cli.training.evals import agents_adapter, runner
 from langbridge_cli.training.l3_cases import l3_cases_from_specs
 
@@ -26,11 +26,13 @@ from langbridge_cli.training.l3_cases import l3_cases_from_specs
 def _build(args, model):
     """Return (specs_for(hard), grade, calls) for the chosen task source.
 
-    Default source is the SWE-bench-style pytest dataset under evals/dataset/
-    (the validated instances "he" built). `--source local` uses a local git repo
-    + cached specs instead (see bench.py).
+    Default source is langbridge-bench (on-disk specs under evals/langbridge-bench/specs/).
+    `--source local` uses a local git repo + cached specs (see bench.py).
     """
-    if getattr(args, "source", "swebench") == "local":
+    source = getattr(args, "source", "langbridge-bench")
+    if source == "swebench":
+        source = "langbridge-bench"
+    if source == "local":
         grade = bench.make_git_grader()
         calls = agents_adapter.make_callables(model=model)
 
@@ -38,12 +40,12 @@ def _build(args, model):
             return bench.list_specs(hard=hard)
         return specs_for, grade, calls
 
-    ws = swebench.Workspaces()
-    grade = swebench.make_grader(ws)
-    calls = swebench.make_callables(ws, model=model)
+    ws = langbridge_bench.Workspaces()
+    grade = langbridge_bench.make_grader(ws)
+    calls = langbridge_bench.make_callables(ws, model=model)
 
     def specs_for(hard=None):
-        return swebench.specs(hard=hard)
+        return langbridge_bench.specs(hard=hard)
     return specs_for, grade, calls
 
 
@@ -121,13 +123,17 @@ def main():
 
     pe = sub.add_parser("eval", help="evaluate one role")
     pe.add_argument("--role", required=True, choices=["l4", "l5", "l3", "loop", "pm"])
-    pe.add_argument("--source", default="swebench", choices=["swebench", "local"])
+    pe.add_argument("--source", default="langbridge-bench",
+                    choices=["langbridge-bench", "swebench", "local"],
+                    help="langbridge-bench (default), swebench (alias), or local git specs")
     pe.add_argument("--model", default=None)
     pe.add_argument("--limit", type=int, default=0)
     pe.set_defaults(func=cmd_eval)
 
     pt = sub.add_parser("train", help="run the evolver (self-play)")
-    pt.add_argument("--source", default="swebench", choices=["swebench", "local"])
+    pt.add_argument("--source", default="langbridge-bench",
+                    choices=["langbridge-bench", "swebench", "local"],
+                    help="langbridge-bench (default), swebench (alias), or local git specs")
     pt.add_argument("--model", default=None, help="agent model")
     pt.add_argument("--evolver-model", default=None, help="model for the evolver itself")
     pt.add_argument("--epochs", type=int, default=1)

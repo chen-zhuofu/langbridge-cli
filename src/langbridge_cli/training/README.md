@@ -3,9 +3,9 @@
 This subsystem distills the "next-door" coder/reviewer self-play worktrial into
 this repo. The idea is the same two-loop design:
 
-- **Inner loop** (already in this repo): for one task, L4/L5 implement and L3
+- **Worker loop** (already in this repo): for one task, L4/L5 implement and L3
   reviews, back and forth, until L3 passes or limits trip.
-- **Outer loop** (the evolver): across many tasks, mine signals from traces and
+- **Optimizer loop** (the evolver): across many tasks, mine signals from traces and
   improve agents — not by editing code, but by editing a shared **policy**
   (guidance bullets + skills) that each role folds into its prompt.
 
@@ -23,18 +23,10 @@ this repo. The idea is the same two-loop design:
   `l5` exist and are injected at runtime, but **trace mining + optimization for
   those roles is still in development.**
 
-Default task source for eval/train: `evals/dataset/sample_validated.jsonl`
-(SWE-bench schema, `--source swebench`). Use `--source local` + `LANGBRIDGE_TARGET_REPO`
-for a git repo with cached specs under `training/specs/`.
+Default task source for eval/train: on-disk specs in `evals/langbridge-bench/specs/`
+(`--source langbridge-bench`; `swebench` is a backward-compat alias). Use
+`--source local` + `LANGBRIDGE_TARGET_REPO` for a git repo with cached specs.
 
-The mapping from next-door to this repo:
-
-| next-door | here |
-|-----------|------|
-| coder | **L4** (normal task) and **L5** (hard task, divide-and-conquer) |
-| reviewer | **L3** (tester) |
-| loop | the L4↔L3 and L5↔L3 inner review loops |
-| (none) | **PM** — top-level decompose → route L4/L5 → e2e |
 
 ## What is built (and tested)
 
@@ -119,8 +111,8 @@ uv run python -m langbridge_cli.training.cli train --epochs 1 --batch-size 2 --s
 
 1. **L5 + PM traces for `train`.** Wire `loop_fn(layer="l5")` on hard tasks and
    `pm_fn` for outer-loop traces; mine PM/L5-specific signals from worklogs.
-2. **Target repo / task set.** Default is `evals/dataset/`; local arrow-style
-   specs remain supported via `--source local`.
+2. **Target repo / task set.** Default is `evals/langbridge-bench/specs/`; local
+   git-derived specs remain supported via `--source local`.
 3. **Model + cost.** Defaults are expensive for many self-play loops; set
    `LANGBRIDGE_MODEL` / `--model` (and `--evolver-model`) as needed.
 4. **Per-round diffs.** The subprocess adapter reconstructs verdicts/comments from

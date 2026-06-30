@@ -17,7 +17,7 @@ Per instance this:
   6. writes predictions.jsonl the official swebench grader can consume.
 
 Run under the docker group, e.g.:
-    sg docker -c "uv run python evals/swebench/run_eval_docker.py --count 10"
+    sg docker -c "uv run python evals/swe-bench/run_eval_docker.py --count 10"
 """
 
 import argparse
@@ -214,7 +214,7 @@ def main():
     parser.add_argument("--namespace", default="swebench", help="Docker Hub namespace for prebuilt images.")
     parser.add_argument("--model", default=os.environ.get("LANGBRIDGE_MODEL", ""))
     parser.add_argument("--timeout", type=int, default=1800, help="Per-instance agent timeout (s).")
-    parser.add_argument("--out", default=str(PROJECT_ROOT / "evals" / "swebench" / "out"))
+    parser.add_argument("--out", default=str(PROJECT_ROOT / "evals" / "swe-bench" / "out"))
     args = parser.parse_args()
 
     api_key = os.environ.get("OPENAI_API_KEY")
@@ -260,7 +260,7 @@ def main():
 
     produced = sum(1 for summary in summaries if summary["has_patch"])
     print(f"\nWrote {predictions_path}")
-    print(f"Produced a patch for {produced}/{len(summaries)} instances. Grade with evals/swebench/README.md.")
+    print(f"Produced a patch for {produced}/{len(summaries)} instances. Grade with evals/swe-bench/README.md.")
 
 
 if __name__ == "__main__":

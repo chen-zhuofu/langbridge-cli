@@ -165,7 +165,7 @@ def grade_diff(spec, candidate_code_diff, repo=None):
 # Spec loading.                                                                #
 # --------------------------------------------------------------------------- #
 def specs_dir() -> str:
-    return SPECS_DIR or str(Path(__file__).resolve().parents[3] / "training" / "specs")
+    return SPECS_DIR or str(Path(__file__).resolve().parents[3] / "evals" / "langbridge-bench" / "specs")
 
 
 def load_spec(task_id, directory=None):
