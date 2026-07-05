@@ -8,7 +8,6 @@ from langbridge_cli.agents.component_plan import (
 )
 
 READY = "L5_STATUS: READY_FOR_REVIEW\nSummary: implemented the sub-task"
-PUSH_BACK = "L5_STATUS: PUSH_BACK\nRationale: the failing test asserts behavior the task never required"
 PASS = "REVIEW_VERDICT: PASS\nEvidence: tests pass"
 NEEDS_WORK = "REVIEW_VERDICT: NEEDS_WORK\nIssues: missing edge case"
 
@@ -84,7 +83,11 @@ def test_l5_escalates_to_pm_when_a_sub_task_keeps_failing(tmp_path, monkeypatch)
 
     def fake_l5(api_key, model, task, context, feedback="", **kwargs):
         calls["l5"] += 1
-        return plan if calls["l5"] == 1 else READY
+        if calls["l5"] == 1:
+            return plan
+        if "Refine only" in task:
+            return "- [ ] smaller step a\n- [ ] smaller step b"
+        return READY
 
     def fake_l3(api_key, model, task, context, **kwargs):
         return NEEDS_WORK
@@ -96,32 +99,10 @@ def test_l5_escalates_to_pm_when_a_sub_task_keeps_failing(tmp_path, monkeypatch)
 
     assert "PM_REVIEW_STATUS: NEEDS_WORK" in output
     assert "escalating to PM" in output
-
-
-def test_l5_push_back_goes_to_jury_and_passes(tmp_path, monkeypatch):
-    _use_tmp_plans(monkeypatch, tmp_path / "plans")
-    monkeypatch.setattr("langbridge_cli.settings.L5_WORKLOG_DIR", tmp_path)
-    l5_outputs = iter(["- [ ] only step", READY, PUSH_BACK])
-    l3_outputs = iter([NEEDS_WORK, NEEDS_WORK, PASS, PASS])
-
-    def fake_l5(api_key, model, task, context, feedback, **kwargs):
-        return next(l5_outputs)
-
-    def fake_l3(api_key, model, task, context, **kwargs):
-        return next(l3_outputs)
-
-    monkeypatch.setattr("langbridge_cli.agents.multi_agent.run_l5_engineer", fake_l5)
-    monkeypatch.setattr("langbridge_cli.agents.multi_agent.run_l3_test_engineer", fake_l3)
-
-    run_log = tmp_path / "run.json"
-    output = run_l5_component("key", "model", {"task": "hard feature"}, run_log_path=run_log)
-
-    # The sub-task passes only because the 2-juror dispute cleared L5's push-back.
-    assert "PM_REVIEW_STATUS: OK" in output
-    worklog = (tmp_path / "run" / "l45_share_1.md").read_text(encoding="utf-8")
-    assert "WORKLOG_TOKEN: push back" in worklog
-    assert "Dispute jury" in worklog
-    assert "DISPUTE_JURY_RESULT: PASS" in worklog
+    assert "split into smaller steps" in output
+    plan_text = (tmp_path / f"{slugify('hard feature')}.md").read_text(encoding="utf-8")
+    assert "smaller step a" in plan_text
+    assert "smaller step b" in plan_text
 
 
 def test_l5_records_the_worklog(tmp_path, monkeypatch):

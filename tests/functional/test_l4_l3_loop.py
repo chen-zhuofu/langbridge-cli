@@ -80,26 +80,24 @@ def test_loop_gives_up_after_max_turns(monkeypatch):
     assert len(l4_fix_calls) == 2
 
 
-def test_loop_stops_when_l4_can_no_longer_deliver(monkeypatch):
-    l4_calls = {"n": 0}
+def test_in_progress_skips_l3_review(monkeypatch):
+    l3_calls = []
 
     def fake_l3(api_key, model, task, context, **kwargs):
-        return NEEDS_WORK
+        l3_calls.append(task)
+        return PASS
 
     def fake_l4(api_key, model, task, context, feedback="", **kwargs):
-        l4_calls["n"] += 1
-        if l4_calls["n"] == 1:
-            return READY  # initial build is fine; the fix attempt then blocks
-        return "L4_STATUS: BLOCKED\nSummary: cannot proceed"
+        return "L4_STATUS: IN_PROGRESS\nSummary: still working"
 
     monkeypatch.setattr("langbridge_cli.agents.multi_agent.run_l3_test_engineer", fake_l3)
     monkeypatch.setattr("langbridge_cli.agents.multi_agent.run_l4_engineer", fake_l4)
 
     output = run_l4_component("key", "model", {"task": "build", "context": "repo"})
 
-    assert "PM_REVIEW_STATUS: NEEDS_WORK" in output
-    assert output.startswith("L4_STATUS: BLOCKED")
-    assert l4_calls["n"] == 2
+    assert "IN_PROGRESS" in output
+    assert "PM_REVIEW_STATUS" not in output
+    assert l3_calls == []
 
 
 def test_worklog_records_negotiation(tmp_path, monkeypatch):

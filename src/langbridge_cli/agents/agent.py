@@ -219,14 +219,11 @@ def run_tool_call(call, api_key=None, model=None, trace_sink=None, approval_call
 def run_l4_component(api_key, model, arguments, trace_sink=None, run_log_path=None, turn_id=None, approval_callback=None):
     """One living L4 builds the task; one living L3 reviews it across rounds.
 
-    The L4 keeps its memory across the whole loop (its own tool calls/results and
-    the L3 exchange), and so does the L3. Only the dispute jury is spawned fresh.
-    The shared L4<->L3 worklog records every turn's status token, which is what the
-    loop routes on to decide whether the task can end.
+    L3 NEEDS_WORK sends feedback back to the same L4; the loop repeats until L3
+    passes, or a turn/time limit is reached.
     """
     from langbridge_cli.agents.multi_agent import (
         l3_review_passed,
-        l4_pushed_back,
         l4_ready_for_review,
         new_l3_session,
         new_l4_session,
@@ -258,94 +255,13 @@ def run_l4_component(api_key, model, arguments, trace_sink=None, run_log_path=No
             return pm_review_result(l4_report, l3_report, "OK")
         append_worklog_entry(run_log_path, "L3 test engineer", l3_report, "concern exist")
 
-        disputed_impl = l4_report
-        l4_response = run_l4_engineer(api_key, model, task, context, l3_report, session=l4)
-        if l4_pushed_back(l4_response):
-            append_worklog_entry(run_log_path, "L4 engineer", l4_response, "push back")
-            return resolve_push_back(api_key, model, task, context, disputed_impl, l4_response, l3_report, l3, trace_sink, run_log_path, turn_id)
-        l4_report = l4_response
+        l4_report = run_l4_engineer(api_key, model, task, context, l3_report, session=l4)
         if not l4_ready_for_review(l4_report):
             append_worklog_entry(run_log_path, "L4 engineer", l4_report, "needs pm")
             return pm_review_result(l4_report, l3_report, "NEEDS_WORK")
         append_worklog_entry(run_log_path, "L4 engineer", l4_report, "ready")
 
     return pm_review_result(l4_report, l3_report, "NEEDS_WORK")
-
-
-def resolve_push_back(api_key, model, task, context, disputed_impl, l4_push_back, prior_l3_report, l3, trace_sink, run_log_path, turn_id):
-    """The same living L3 re-judges the push-back; if it still objects, a fresh 2-juror jury settles it."""
-    from langbridge_cli.agents.multi_agent import l3_review_passed, run_l3_test_engineer
-
-    rejudge = run_l3_test_engineer(
-        api_key, model, task, push_back_rejudge_context(context, disputed_impl, l4_push_back, prior_l3_report), session=l3
-    )
-    if l3_review_passed(rejudge):
-        append_worklog_entry(run_log_path, "L3 test engineer", rejudge, "pass")
-        return pm_review_result(disputed_impl, rejudge, "OK")
-    append_worklog_entry(run_log_path, "L3 test engineer", rejudge, "push back")
-
-    jury_pass, jury_summary = run_dispute_jury(api_key, model, task, context, disputed_impl, trace_sink, run_log_path, turn_id)
-    append_worklog_entry(run_log_path, "Dispute jury", jury_summary, "pass" if jury_pass else "failure")
-    return pm_review_result(disputed_impl, jury_summary, "OK" if jury_pass else "NEEDS_WORK")
-
-
-def run_dispute_jury(api_key, model, task, context, worker_report, trace_sink, run_log_path, turn_id, worker_label="L4"):
-    from langbridge_cli.agents.multi_agent import l3_review_passed
-
-    reports = [
-        run_l3_review(api_key, model, task, juror_context(context, worker_report, worker_label), trace_sink, run_log_path, turn_id)
-        for _ in range(2)
-    ]
-    jury_pass = all(l3_review_passed(report) for report in reports)
-    return jury_pass, format_jury_summary(reports, jury_pass)
-
-
-def push_back_rejudge_context(context, disputed_impl, push_back, prior_l3_report, worker_label="L4"):
-    parts = []
-    if context:
-        parts.append(context)
-    parts.append(f"{worker_label} pushed back on your review instead of changing the code.")
-    parts.append(f"Your prior review:\n{prior_l3_report}")
-    parts.append(f"{worker_label} implementation under review:\n{disputed_impl}")
-    parts.append(f"{worker_label} push-back rationale:\n{push_back}")
-    parts.append(
-        "Re-judge honestly. If the push-back is right, concede and return PASS. "
-        "If it is wrong, insist with NEEDS_WORK or FAIL; an independent jury will settle it."
-    )
-    return "\n\n".join(parts)
-
-
-def juror_context(context, worker_report, worker_label="L4"):
-    parts = []
-    if context:
-        parts.append(context)
-    parts.append(f"You are an independent juror. Verify the {worker_label} implementation on its own merits and vote PASS or FAIL.")
-    parts.append(f"{worker_label} implementation to verify:\n{worker_report}")
-    return "\n\n".join(parts)
-
-
-def format_jury_summary(reports, jury_pass):
-    lines = [f"DISPUTE_JURY_RESULT: {'PASS' if jury_pass else 'FAIL'}", ""]
-    for index, report in enumerate(reports, 1):
-        lines.append(f"Juror {index}:\n{report}")
-        lines.append("")
-    return "\n".join(lines).strip()
-
-
-def run_l3_review(api_key, model, task, l3_context, trace_sink, run_log_path, turn_id):
-    from langbridge_cli.agents.multi_agent import run_l3_test_engineer
-
-    if trace_sink is None and run_log_path is None:
-        return run_l3_test_engineer(api_key, model, task, l3_context)
-    return run_l3_test_engineer(
-        api_key,
-        model,
-        task,
-        l3_context,
-        trace_sink=trace_sink,
-        run_log_path=run_log_path,
-        turn_id=turn_id,
-    )
 
 
 def pm_review_result(l4_report, l3_report, pm_status):
@@ -357,19 +273,21 @@ def run_l5_component(api_key, model, arguments, trace_sink=None, run_log_path=No
 
     L5 first writes (or reuses) a component_task_plan that splits the task into
     technical_sub_tasks, then conquers them one at a time. Each sub-task goes
-    through the L5<->L3 review (with push-back and a 2-juror dispute), exactly like
-    the L4 path. A passed sub-task is checked off in the plan; a failed one
-    escalates to the PM. When every sub-task passes, the delivery returns to the PM
-    to accept or reject, ending in PM_REVIEW_STATUS like the L4 path.
+    through the L5<->L3 review loop. A passed sub-task is committed in git and
+    checked off in the plan; a failed attempt reverts workspace changes, splits
+    the unfinished sub-task into smaller steps in the plan, and escalates to the
+    PM so it can call L5 again later.
     """
     from langbridge_cli.agents.component_plan import (
         next_unfinished_index,
         parse_sub_tasks,
         read_component_plan,
         render_component_plan,
+        replace_sub_task,
         write_component_plan,
     )
     from langbridge_cli.agents.multi_agent import l5_ready_for_review, new_l5_session, run_l5_engineer
+    from langbridge_cli.agents import workspace_git
 
     task = arguments.get("task", "")
     context = arguments.get("context", "")
@@ -388,6 +306,7 @@ def run_l5_component(api_key, model, arguments, trace_sink=None, run_log_path=No
             return l5_component_result(task, sub_tasks, "OK", "All technical_sub_tasks passed L3 review.")
         sub_task = sub_tasks[index][0]
         sub_context = l5_sub_task_context(task, context)
+        snapshot = workspace_git.snapshot_head()
 
         # A brand-new L5 owns this one sub-task; it stays alive across the sub-task's
         # review rounds but knows nothing of the L5s that handled earlier sub-tasks.
@@ -395,24 +314,80 @@ def run_l5_component(api_key, model, arguments, trace_sink=None, run_log_path=No
         l5_output = run_l5_engineer(api_key, model, sub_task, sub_context, "", session=l5)
         if not l5_ready_for_review(l5_output):
             append_worklog_entry(run_log_path, "L5 engineer", l5_output, "needs pm", "L5")
-            return l5_component_result(task, sub_tasks, "NEEDS_WORK", f"L5 could not deliver technical_sub_task '{sub_task}':\n{l5_output}")
+            return _l5_fail_sub_task(
+                api_key, model, task, context, sub_tasks, index, sub_task, snapshot,
+                f"L5 could not deliver technical_sub_task '{sub_task}':\n{l5_output}",
+                l5_output,
+                trace_sink, run_log_path, turn_id, approval_callback,
+            )
 
         accepted, _, review = run_l5_review_loop(api_key, model, sub_task, sub_context, l5_output, l5, trace_sink, run_log_path, turn_id, approval_callback)
         if not accepted:
-            return l5_component_result(task, sub_tasks, "NEEDS_WORK", f"technical_sub_task '{sub_task}' failed L3 review; escalating to PM.\n{review}")
+            return _l5_fail_sub_task(
+                api_key, model, task, context, sub_tasks, index, sub_task, snapshot,
+                f"technical_sub_task '{sub_task}' failed L3 review; escalating to PM.\n{review}",
+                review,
+                trace_sink, run_log_path, turn_id, approval_callback,
+            )
 
+        workspace_git.commit_sub_task(sub_task)
         sub_tasks[index] = (sub_task, True)
         write_component_plan(task, render_component_plan(task, sub_tasks))
 
     return l5_component_result(task, sub_tasks, "NEEDS_WORK", "L5 hit the max Ralph turns before finishing every technical_sub_task.")
 
 
+def _l5_fail_sub_task(
+    api_key, model, component_task, context, sub_tasks, index, sub_task, snapshot,
+    note, failure_detail, trace_sink, run_log_path, turn_id, approval_callback,
+):
+    from langbridge_cli.agents.component_plan import render_component_plan, write_component_plan
+    from langbridge_cli.agents import workspace_git
+
+    workspace_git.revert_snapshot(snapshot)
+    sub_tasks = refine_failed_sub_task(
+        api_key, model, component_task, sub_tasks, index, sub_task, failure_detail,
+        trace_sink, run_log_path, turn_id, approval_callback,
+    )
+    write_component_plan(component_task, render_component_plan(component_task, sub_tasks))
+    append_worklog_entry(run_log_path, "L5 planner", "Refined unfinished sub-task in component_task_plan.", "plan", "L5")
+    return l5_component_result(
+        component_task,
+        sub_tasks,
+        "NEEDS_WORK",
+        f"{note}\n\nThe unfinished sub-task was split into smaller steps in the component_task_plan; call L5 again to continue.",
+    )
+
+
+def refine_failed_sub_task(
+    api_key, model, component_task, sub_tasks, index, failed_sub_task, reason,
+    trace_sink, run_log_path, turn_id, approval_callback,
+):
+    from langbridge_cli.agents.component_plan import parse_sub_tasks, replace_sub_task
+
+    prompt = (
+        "Refine only. The technical_sub_task below was too large or failed review. "
+        "Split it into 2-4 smaller, ordered steps that can each be implemented and "
+        "tested on its own. Return ONLY the checklist, one item per line as "
+        "'- [ ] <technical_sub_task>'.\n\n"
+        f"Component task:\n{component_task}\n\n"
+        f"Failed sub-task:\n{failed_sub_task}\n\n"
+        f"What went wrong:\n{reason[:2000]}"
+    )
+    output = run_l5_call(api_key, model, prompt, "", "", trace_sink, run_log_path, turn_id, approval_callback)
+    new_items = [text for text, _ in parse_sub_tasks(output)]
+    if not new_items:
+        new_items = [
+            f"First part: {failed_sub_task}",
+            f"Finish and verify: {failed_sub_task}",
+        ]
+    return replace_sub_task(sub_tasks, index, new_items)
+
+
 def run_l5_review_loop(api_key, model, sub_task, context, l5_output, l5, trace_sink, run_log_path, turn_id, approval_callback):
-    """One living L5 (the same `l5` that built the sub-task) and one living L3 trade
-    review turns until the sub-task passes, blocks, or a push-back is settled by a fresh jury."""
+    """One living L5 and one living L3 trade review turns until the sub-task passes or limits trip."""
     from langbridge_cli.agents.multi_agent import (
         l3_review_passed,
-        l5_pushed_back,
         l5_ready_for_review,
         new_l3_session,
         run_l3_test_engineer,
@@ -434,36 +409,13 @@ def run_l5_review_loop(api_key, model, sub_task, context, l5_output, l5, trace_s
             return True, l5_report, l3_report
         append_worklog_entry(run_log_path, "L3 test engineer", l3_report, "concern exist", "L5")
 
-        disputed_impl = l5_report
-        l5_response = run_l5_engineer(api_key, model, sub_task, context, l3_report, session=l5)
-        if l5_pushed_back(l5_response):
-            append_worklog_entry(run_log_path, "L5 engineer", l5_response, "push back", "L5")
-            accepted, summary = resolve_l5_push_back(api_key, model, sub_task, context, disputed_impl, l5_response, l3_report, l3, trace_sink, run_log_path, turn_id)
-            return accepted, disputed_impl, summary
-        l5_report = l5_response
+        l5_report = run_l5_engineer(api_key, model, sub_task, context, l3_report, session=l5)
         if not l5_ready_for_review(l5_report):
             append_worklog_entry(run_log_path, "L5 engineer", l5_report, "needs pm", "L5")
             return False, l5_report, l3_report
         append_worklog_entry(run_log_path, "L5 engineer", l5_report, "ready", "L5")
 
     return False, l5_report, l3_report
-
-
-def resolve_l5_push_back(api_key, model, sub_task, context, disputed_impl, l5_push_back, prior_l3_report, l3, trace_sink, run_log_path, turn_id):
-    """The same living L3 re-judges the push-back; if it still objects, a fresh 2-juror jury settles it."""
-    from langbridge_cli.agents.multi_agent import l3_review_passed, run_l3_test_engineer
-
-    rejudge = run_l3_test_engineer(
-        api_key, model, sub_task, push_back_rejudge_context(context, disputed_impl, l5_push_back, prior_l3_report, "L5"), session=l3
-    )
-    if l3_review_passed(rejudge):
-        append_worklog_entry(run_log_path, "L3 test engineer", rejudge, "pass", "L5")
-        return True, rejudge
-    append_worklog_entry(run_log_path, "L3 test engineer", rejudge, "push back", "L5")
-
-    jury_pass, jury_summary = run_dispute_jury(api_key, model, sub_task, context, disputed_impl, trace_sink, run_log_path, turn_id, "L5")
-    append_worklog_entry(run_log_path, "Dispute jury", jury_summary, "pass" if jury_pass else "failure", "L5")
-    return jury_pass, jury_summary
 
 
 def run_l5_call(api_key, model, task, context, feedback, trace_sink, run_log_path, turn_id, approval_callback):

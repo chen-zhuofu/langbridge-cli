@@ -108,9 +108,15 @@ def cmd_train(args):
     evolver_model = args.evolver_model or model
     specs_for, grade, calls = _build(args, model)
     evolve_fn = evolver.make_evolve_fn(api_key, evolver_model)
+    jury_fn = None
+    if not args.no_jury:
+        from langbridge_cli.training import jury as training_jury
+
+        jury_fn = training_jury.make_jury_fn(api_key, model)
     specs = _limit(specs_for(), args)
     results = evolver.run(
         specs, loop_fn=calls["loop_fn"], grade=grade, evolve_fn=evolve_fn,
+        jury_fn=jury_fn,
         epochs=args.epochs, batch_size=args.batch_size,
         do_gate=not args.no_gate, checkpoint_every=args.checkpoint_every,
     )
@@ -145,6 +151,7 @@ def main():
     pt.add_argument("--epochs", type=int, default=TRAIN_DEFAULT_EPOCHS)
     pt.add_argument("--batch-size", type=int, default=TRAIN_DEFAULT_BATCH_SIZE)
     pt.add_argument("--no-gate", action="store_true", help="skip the acceptance gate")
+    pt.add_argument("--no-jury", action="store_true", help="skip offline jury when tests are unavailable")
     pt.add_argument("--checkpoint-every", default=TRAIN_DEFAULT_CHECKPOINT_EVERY, choices=["batch", "epoch"])
     pt.add_argument("--limit", type=int, default=0)
     pt.set_defaults(func=cmd_train)

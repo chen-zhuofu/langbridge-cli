@@ -157,24 +157,9 @@ def l4_ready_for_review(report):
     return first_line == "l4_status: ready_for_review"
 
 
-def l4_blocked(report):
-    first_line = report.strip().splitlines()[0].strip().lower() if report.strip() else ""
-    return first_line == "l4_status: blocked"
-
-
-def l4_pushed_back(report):
-    first_line = report.strip().splitlines()[0].strip().lower() if report.strip() else ""
-    return first_line == "l4_status: push_back"
-
-
 def l5_ready_for_review(report):
     first_line = report.strip().splitlines()[0].strip().lower() if report.strip() else ""
     return first_line == "l5_status: ready_for_review"
-
-
-def l5_pushed_back(report):
-    first_line = report.strip().splitlines()[0].strip().lower() if report.strip() else ""
-    return first_line == "l5_status: push_back"
 
 
 class SpecialistSession:

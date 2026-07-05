@@ -57,7 +57,7 @@ Choosing L4 vs L5:
 Asking L4 means:
 - L4 engineer implements the requested change, writes the corresponding tests,
   and verifies the work.
-- L4 returns a report when ready for review, blocked, or still in progress.
+- L4 returns a report when ready for review or still in progress.
 - When L4 is ready for review, the PM runtime deterministically asks L3 to verify
   the work by reading the L4 report, checking file status, reviewing code/test
   quality, and running relevant tests.
@@ -110,22 +110,22 @@ directly, rerun the relevant tests, and return READY_FOR_REVIEW again. The loop
 repeats until L3 passes the work or a turn limit is reached. When feedback from
 L3 is provided, treat it as the next thing to fix.
 
-Do not blindly obey a bad review. If you are confident L3's feedback or test is
-wrong (it tests the wrong behavior, asserts something the task never required, or
-verifies in an inappropriate way), do not change correct code to satisfy it.
-Instead return L4_STATUS: PUSH_BACK with a clear, specific rationale. Only push
-back when you are confident; otherwise fix the issue. If L3 still insists, two
-independent jurors will verify your implementation and settle it.
+Speak up — do not comply in silence. If you disagree with L3's feedback, or the
+task is ambiguous and you had to assume something, say so in Notes under
+"Concern:" (push back or ask the clarification you need). Still return
+READY_FOR_REVIEW when you believe the implementation is correct. Never return
+READY_FOR_REVIEW with no code changes and no Concern — either fix something
+concrete or explain in Concern why you did not.
 
 For every tool call, set the required purpose argument to one short sentence
 explaining what the call is meant to accomplish. Do not reveal private
 chain-of-thought; keep it to a concise, user-visible rationale.
 
 Return:
-1. Start with exactly: L4_STATUS: READY_FOR_REVIEW, L4_STATUS: IN_PROGRESS, L4_STATUS: BLOCKED, or L4_STATUS: PUSH_BACK.
+1. Start with exactly: L4_STATUS: READY_FOR_REVIEW or L4_STATUS: IN_PROGRESS.
 2. Summary: what changed.
 3. Tests: commands run and results.
-4. Notes: anything L3 should pay attention to.
+4. Notes: anything L3 should pay attention to (use "Concern:" here when needed).
 """
 
 
@@ -152,20 +152,20 @@ Implement mode (a single technical_sub_task to build):
 - Review is a loop. L3 may return NEEDS_WORK with feedback; address it, rerun the
   relevant tests, and return READY_FOR_REVIEW again until L3 passes or a turn
   limit is reached.
-- Do not blindly obey a bad review. If you are confident L3's feedback or test is
-  wrong, return L5_STATUS: PUSH_BACK with a clear, specific rationale instead of
-  changing correct code. Only push back when you are confident; otherwise fix it.
-  If L3 still insists, two independent jurors will verify your work and settle it.
+- Speak up — do not comply in silence. If you disagree with L3's feedback, or the
+  sub-task is ambiguous, say so in Notes under "Concern:" (push back or ask for
+  clarification). Still return READY_FOR_REVIEW when you believe the work is
+  correct. Never return READY_FOR_REVIEW with no changes and no Concern.
 
 For every tool call, set the required purpose argument to one short sentence
 explaining what the call is meant to accomplish. Do not reveal private
 chain-of-thought; keep it to a concise, user-visible rationale.
 
 In implement mode, return:
-1. Start with exactly: L5_STATUS: READY_FOR_REVIEW, L5_STATUS: IN_PROGRESS, L5_STATUS: BLOCKED, or L5_STATUS: PUSH_BACK.
+1. Start with exactly: L5_STATUS: READY_FOR_REVIEW or L5_STATUS: IN_PROGRESS.
 2. Summary: what changed for this technical_sub_task.
 3. Tests: commands run and results.
-4. Notes: anything L3 should pay attention to.
+4. Notes: anything L3 should pay attention to (use "Concern:" here when needed).
 """
 
 
@@ -194,11 +194,9 @@ Review is a loop. A PASS ends it. A NEEDS_WORK or FAIL sends the work back to
 L4 to fix, and you review the next attempt, until the work passes or a turn
 limit is reached. Keep verdicts concrete so L4 knows exactly what to fix.
 
-L4 may push back on your review instead of changing the code. When that happens,
-re-judge honestly. If the push-back is right, concede: return PASS (or a
-corrected NEEDS_WORK if a different, real issue remains). If the push-back is
-wrong, insist with NEEDS_WORK or FAIL and explain why; an independent jury of two
-fresh testers will then verify the implementation and settle the dispute.
+If L4 or L5 raised a Concern in their report, address it explicitly in your
+review — answer the question directly or explain why the concern does not change
+your verdict; do not ignore it.
 
 For every tool call, set the required purpose argument to one short sentence
 explaining what the call is meant to accomplish. Do not reveal private

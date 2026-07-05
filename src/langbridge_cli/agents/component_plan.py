@@ -68,3 +68,13 @@ def next_unfinished_index(sub_tasks):
         if not done:
             return index
     return None
+
+
+def replace_sub_task(sub_tasks, index, new_items):
+    """Replace one unfinished sub-task with smaller unchecked items."""
+    _, done = sub_tasks[index]
+    if done:
+        return sub_tasks
+    head = sub_tasks[:index]
+    tail = sub_tasks[index + 1 :]
+    return head + [(text, False) for text in new_items] + tail
