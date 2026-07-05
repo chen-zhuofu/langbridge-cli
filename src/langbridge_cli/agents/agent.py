@@ -219,9 +219,11 @@ def run_tool_call(call, api_key=None, model=None, trace_sink=None, approval_call
 def run_l4_component(api_key, model, arguments, trace_sink=None, run_log_path=None, turn_id=None, approval_callback=None):
     """One living L4 builds the task; one living L3 reviews it across rounds.
 
-    L3 NEEDS_WORK sends feedback back to the same L4; the loop repeats until L3
-    passes, or a turn/time limit is reached. A passing task is committed in git;
-    a failed attempt reverts workspace changes to the pre-task snapshot.
+    The TDD harness runs first (tests only, red gate, hash lock), then
+    implementation. L3 NEEDS_WORK sends feedback back to the same L4; the loop
+    repeats until L3 passes, or a turn/time limit is reached. A passing task is
+    committed in git; a failed attempt reverts workspace changes to the pre-task
+    snapshot.
     """
     from langbridge_cli.agents.multi_agent import (
         l3_review_passed,
@@ -231,18 +233,37 @@ def run_l4_component(api_key, model, arguments, trace_sink=None, run_log_path=No
         run_l3_test_engineer,
         run_l4_engineer,
     )
-    from langbridge_cli.agents import workspace_git
+    from langbridge_cli.agents import tdd_harness, workspace_git
 
     task = arguments.get("task", "")
     context = arguments.get("context", "")
     feedback = arguments.get("feedback", "")
 
-    l4 = new_l4_session(api_key, model, trace_sink=trace_sink, approval_callback=approval_callback, run_log_path=run_log_path, turn_id=turn_id)
-    l4_report = run_l4_engineer(api_key, model, task, context, feedback, session=l4)
-    if not l4_ready_for_review(l4_report):
-        return l4_report
-
     snapshot = workspace_git.snapshot_head()
+    early, impl_session, l4_report, locked = _run_worker_tdd(
+        api_key,
+        model,
+        task,
+        context,
+        feedback,
+        new_l4_session,
+        run_l4_engineer,
+        l4_ready_for_review,
+        "L4",
+        trace_sink,
+        approval_callback,
+        run_log_path,
+        turn_id,
+    )
+    if early is not None:
+        workspace_git.revert_snapshot(snapshot)
+        return early
+
+    ok, lock_msg = tdd_harness.verify_locked_unchanged(locked)
+    if not ok:
+        workspace_git.revert_snapshot(snapshot)
+        return pm_review_result(l4_report, lock_msg, "NEEDS_WORK")
+
     start_worklog(run_log_path, task)
     append_worklog_entry(run_log_path, "L4 engineer", l4_report, "ready")
 
@@ -252,6 +273,11 @@ def run_l4_component(api_key, model, arguments, trace_sink=None, run_log_path=No
     for _ in range(MAX_L4_L3_TURNS):
         if over_time_budget(start_time, MAX_L4_L3_SECONDS):
             break
+        ok, lock_msg = tdd_harness.verify_locked_unchanged(locked)
+        if not ok:
+            append_worklog_entry(run_log_path, "TDD harness", lock_msg, "failure")
+            workspace_git.revert_snapshot(snapshot)
+            return pm_review_result(l4_report, lock_msg, "NEEDS_WORK")
         l3_report = run_l3_test_engineer(api_key, model, task, pm_l3_review_context(context, l4_report), session=l3)
         if l3_review_passed(l3_report):
             append_worklog_entry(run_log_path, "L3 test engineer", l3_report, "pass")
@@ -259,7 +285,15 @@ def run_l4_component(api_key, model, arguments, trace_sink=None, run_log_path=No
             return pm_review_result(l4_report, l3_report, "OK")
         append_worklog_entry(run_log_path, "L3 test engineer", l3_report, "concern exist")
 
-        l4_report = run_l4_engineer(api_key, model, task, context, l3_report, session=l4)
+        l4_report = run_l4_engineer(
+            api_key,
+            model,
+            task,
+            context,
+            l3_report,
+            session=impl_session,
+            user_prompt=tdd_harness.implement_phase_user_prompt(task, context, locked, l3_report, "L4"),
+        )
         if not l4_ready_for_review(l4_report):
             append_worklog_entry(run_log_path, "L4 engineer", l4_report, "needs pm")
             workspace_git.revert_snapshot(snapshot)
@@ -268,6 +302,68 @@ def run_l4_component(api_key, model, arguments, trace_sink=None, run_log_path=No
 
     workspace_git.revert_snapshot(snapshot)
     return pm_review_result(l4_report, l3_report, "NEEDS_WORK")
+
+
+def _run_worker_tdd(
+    api_key,
+    model,
+    task,
+    context,
+    feedback,
+    new_session_fn,
+    run_engineer_fn,
+    ready_fn,
+    worker_label,
+    trace_sink,
+    approval_callback,
+    run_log_path,
+    turn_id,
+):
+    """Return (early_report, impl_session, impl_report, locked_hashes).
+
+    When early_report is not None the caller should return it immediately.
+    """
+    from langbridge_cli.agents import tdd_harness
+
+    session_kwargs = dict(
+        trace_sink=trace_sink,
+        approval_callback=approval_callback,
+        run_log_path=run_log_path,
+        turn_id=turn_id,
+    )
+    test_session = new_session_fn(api_key, model, write_guard=tdd_harness.test_phase_guard, **session_kwargs)
+    test_report = run_engineer_fn(
+        api_key,
+        model,
+        task,
+        context,
+        session=test_session,
+        user_prompt=tdd_harness.test_phase_user_prompt(task, context, worker_label),
+    )
+    if not ready_fn(test_report):
+        return test_report, None, None, None
+
+    test_paths = tdd_harness.collect_changed_test_paths()
+    red_ok, red_msg = tdd_harness.verify_red_gate(test_paths)
+    if not red_ok:
+        return f"{worker_label}_STATUS: IN_PROGRESS\nSummary: {red_msg}", None, None, None
+
+    locked = tdd_harness.lock_hashes(test_paths)
+    tdd_harness.save_lock(task, locked)
+    write_guard = lambda tool, args: tdd_harness.implement_phase_guard(locked, tool, args)
+    impl_session = new_session_fn(api_key, model, write_guard=write_guard, **session_kwargs)
+    impl_report = run_engineer_fn(
+        api_key,
+        model,
+        task,
+        context,
+        feedback,
+        session=impl_session,
+        user_prompt=tdd_harness.implement_phase_user_prompt(task, context, locked, feedback, worker_label),
+    )
+    if not ready_fn(impl_report):
+        return impl_report, None, None, None
+    return None, impl_session, impl_report, locked
 
 
 def pm_review_result(l4_report, l3_report, pm_status):
@@ -314,20 +410,35 @@ def run_l5_component(api_key, model, arguments, trace_sink=None, run_log_path=No
         sub_context = l5_sub_task_context(task, context)
         snapshot = workspace_git.snapshot_head()
 
-        # A brand-new L5 owns this one sub-task; it stays alive across the sub-task's
-        # review rounds but knows nothing of the L5s that handled earlier sub-tasks.
-        l5 = new_l5_session(api_key, model, trace_sink=trace_sink, approval_callback=approval_callback, run_log_path=run_log_path, turn_id=turn_id)
-        l5_output = run_l5_engineer(api_key, model, sub_task, sub_context, "", session=l5)
-        if not l5_ready_for_review(l5_output):
-            append_worklog_entry(run_log_path, "L5 engineer", l5_output, "needs pm", "L5")
+        from langbridge_cli.agents.multi_agent import l5_ready_for_review, new_l5_session, run_l5_engineer
+
+        early, l5, l5_output, locked = _run_worker_tdd(
+            api_key,
+            model,
+            sub_task,
+            sub_context,
+            "",
+            new_l5_session,
+            run_l5_engineer,
+            l5_ready_for_review,
+            "L5",
+            trace_sink,
+            approval_callback,
+            run_log_path,
+            turn_id,
+        )
+        if early is not None:
+            append_worklog_entry(run_log_path, "L5 engineer", early, "needs pm", "L5")
             return _l5_fail_sub_task(
                 api_key, model, task, context, sub_tasks, index, sub_task, snapshot,
-                f"L5 could not deliver technical_sub_task '{sub_task}':\n{l5_output}",
-                l5_output,
+                f"L5 could not deliver technical_sub_task '{sub_task}':\n{early}",
+                early,
                 trace_sink, run_log_path, turn_id, approval_callback,
             )
 
-        accepted, _, review = run_l5_review_loop(api_key, model, sub_task, sub_context, l5_output, l5, trace_sink, run_log_path, turn_id, approval_callback)
+        accepted, _, review = run_l5_review_loop(
+            api_key, model, sub_task, sub_context, l5_output, l5, locked, trace_sink, run_log_path, turn_id, approval_callback
+        )
         if not accepted:
             return _l5_fail_sub_task(
                 api_key, model, task, context, sub_tasks, index, sub_task, snapshot,
@@ -390,8 +501,9 @@ def refine_failed_sub_task(
     return replace_sub_task(sub_tasks, index, new_items)
 
 
-def run_l5_review_loop(api_key, model, sub_task, context, l5_output, l5, trace_sink, run_log_path, turn_id, approval_callback):
+def run_l5_review_loop(api_key, model, sub_task, context, l5_output, l5, locked, trace_sink, run_log_path, turn_id, approval_callback):
     """One living L5 and one living L3 trade review turns until the sub-task passes or limits trip."""
+    from langbridge_cli.agents import tdd_harness
     from langbridge_cli.agents.multi_agent import (
         l3_review_passed,
         l5_ready_for_review,
@@ -409,13 +521,25 @@ def run_l5_review_loop(api_key, model, sub_task, context, l5_output, l5, trace_s
     for _ in range(MAX_L4_L3_TURNS):
         if over_time_budget(start_time, MAX_L4_L3_SECONDS):
             break
+        ok, lock_msg = tdd_harness.verify_locked_unchanged(locked)
+        if not ok:
+            append_worklog_entry(run_log_path, "TDD harness", lock_msg, "failure", "L5")
+            return False, l5_report, lock_msg
         l3_report = run_l3_test_engineer(api_key, model, sub_task, pm_l3_review_context(context, l5_report, "L5"), session=l3)
         if l3_review_passed(l3_report):
             append_worklog_entry(run_log_path, "L3 test engineer", l3_report, "pass", "L5")
             return True, l5_report, l3_report
         append_worklog_entry(run_log_path, "L3 test engineer", l3_report, "concern exist", "L5")
 
-        l5_report = run_l5_engineer(api_key, model, sub_task, context, l3_report, session=l5)
+        l5_report = run_l5_engineer(
+            api_key,
+            model,
+            sub_task,
+            context,
+            l3_report,
+            session=l5,
+            user_prompt=tdd_harness.implement_phase_user_prompt(sub_task, context, locked, l3_report, "L5"),
+        )
         if not l5_ready_for_review(l5_report):
             append_worklog_entry(run_log_path, "L5 engineer", l5_report, "needs pm", "L5")
             return False, l5_report, l3_report

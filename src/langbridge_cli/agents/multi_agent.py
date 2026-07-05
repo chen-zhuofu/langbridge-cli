@@ -109,16 +109,18 @@ def run_l3_test_engineer(api_key, model, task, context="", trace_sink=None, run_
     return session.send(l3_user_prompt(task, context))
 
 
-def run_l4_engineer(api_key, model, task, context="", feedback="", trace_sink=None, approval_callback=None, run_log_path=None, turn_id=None, session=None):
+def run_l4_engineer(api_key, model, task, context="", feedback="", trace_sink=None, approval_callback=None, run_log_path=None, turn_id=None, session=None, user_prompt=None):
     if session is None:
         session = new_l4_session(api_key, model, trace_sink=trace_sink, approval_callback=approval_callback, run_log_path=run_log_path, turn_id=turn_id)
-    return session.send(l4_l5_user_prompt(task, context, feedback))
+    prompt = user_prompt if user_prompt is not None else l4_l5_user_prompt(task, context, feedback)
+    return session.send(prompt)
 
 
-def run_l5_engineer(api_key, model, task, context="", feedback="", trace_sink=None, approval_callback=None, run_log_path=None, turn_id=None, session=None):
+def run_l5_engineer(api_key, model, task, context="", feedback="", trace_sink=None, approval_callback=None, run_log_path=None, turn_id=None, session=None, user_prompt=None):
     if session is None:
         session = new_l5_session(api_key, model, trace_sink=trace_sink, approval_callback=approval_callback, run_log_path=run_log_path, turn_id=turn_id)
-    return session.send(l4_l5_user_prompt(task, context, feedback))
+    prompt = user_prompt if user_prompt is not None else l4_l5_user_prompt(task, context, feedback)
+    return session.send(prompt)
 
 
 def l3_user_prompt(task, context):
@@ -172,7 +174,8 @@ class SpecialistSession:
     """
 
     def __init__(self, api_key, model, system_prompt, tool_schemas, tools, label,
-                 trace_sink=None, approval_callback=None, run_log_path=None, turn_id=None):
+                 trace_sink=None, approval_callback=None, run_log_path=None, turn_id=None,
+                 write_guard=None):
         self.api_key = api_key
         self.model = model
         self.tool_schemas = tool_schemas
@@ -182,6 +185,7 @@ class SpecialistSession:
         self.approval_callback = approval_callback
         self.run_log_path = run_log_path
         self.turn_id = turn_id
+        self.write_guard = write_guard
         self.messages = [{"role": "system", "content": system_prompt}]
         self.tool_history = []
         self.step = 0
@@ -210,7 +214,9 @@ class SpecialistSession:
             write_worklog_step(self.run_log_path, self.label, self.worklog_id, self.turn_id, self.step, output)
             self.messages.extend(output)
             for call in tool_calls:
-                tool_output = run_specialist_tool_call(call, self.tools, self.label, approval_callback=self.approval_callback)
+                tool_output = run_specialist_tool_call(
+                    call, self.tools, self.label, approval_callback=self.approval_callback, write_guard=self.write_guard
+                )
                 self.tool_history.append({"call": call, "output": tool_output})
                 self.messages.append(tool_output)
                 write_worklog_observation(self.run_log_path, self.label, self.worklog_id, self.turn_id, self.step, tool_output)
@@ -239,17 +245,19 @@ def new_l3_session(api_key, model, trace_sink=None, run_log_path=None, turn_id=N
     )
 
 
-def new_l4_session(api_key, model, trace_sink=None, approval_callback=None, run_log_path=None, turn_id=None):
+def new_l4_session(api_key, model, trace_sink=None, approval_callback=None, run_log_path=None, turn_id=None, write_guard=None):
     return SpecialistSession(
         api_key, model, l4_system_prompt(), L4_TOOL_SCHEMAS, L4_TOOLS, "L4 engineer",
         trace_sink=trace_sink, approval_callback=approval_callback, run_log_path=run_log_path, turn_id=turn_id,
+        write_guard=write_guard,
     )
 
 
-def new_l5_session(api_key, model, trace_sink=None, approval_callback=None, run_log_path=None, turn_id=None):
+def new_l5_session(api_key, model, trace_sink=None, approval_callback=None, run_log_path=None, turn_id=None, write_guard=None):
     return SpecialistSession(
         api_key, model, l5_system_prompt(), L5_TOOL_SCHEMAS, L5_TOOLS, "L5 engineer",
         trace_sink=trace_sink, approval_callback=approval_callback, run_log_path=run_log_path, turn_id=turn_id,
+        write_guard=write_guard,
     )
 
 
@@ -264,7 +272,7 @@ def create_specialist_response(api_key, model, messages, tool_schemas, label):
     )
 
 
-def run_specialist_tool_call(call, tools, label, approval_callback=None):
+def run_specialist_tool_call(call, tools, label, approval_callback=None, write_guard=None):
     name = call.get("name")
     call_id = call.get("call_id")
 
@@ -272,6 +280,10 @@ def run_specialist_tool_call(call, tools, label, approval_callback=None):
         arguments = strip_tool_purpose(json.loads(call.get("arguments") or "{}"))
         if name not in tools:
             raise ValueError(f"Unknown {label} tool: {name}")
+        if write_guard is not None and name in L4_WRITE_TOOLS:
+            guard_error = write_guard(name, arguments)
+            if guard_error:
+                raise PermissionError(guard_error)
         if label in ("L4 engineer", "L5 engineer") and name in L4_WRITE_TOOLS and not approve_l4_tool_write(
             label,
             name,

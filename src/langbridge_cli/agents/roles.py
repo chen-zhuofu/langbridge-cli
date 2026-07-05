@@ -110,6 +110,12 @@ directly, rerun the relevant tests, and return READY_FOR_REVIEW again. The loop
 repeats until L3 passes the work or a turn limit is reached. When feedback from
 L3 is provided, treat it as the next thing to fix.
 
+The runtime TDD harness splits each task into two enforced phases:
+
+1. Test phase — write ONLY failing tests; production code is blocked by the harness.
+2. Implement phase — tests are locked by content hash; any test edit is blocked.
+   Implement production code until the locked tests pass.
+
 Speak up — do not comply in silence. If you disagree with L3's feedback, or the
 task is ambiguous and you had to assume something, say so in Notes under
 "Concern:" (push back or ask the clarification you need). Still return
@@ -144,8 +150,10 @@ Plan mode ("Plan only" request):
 - Do not implement anything in plan mode.
 
 Implement mode (a single technical_sub_task to build):
-- Implement just that one technical_sub_task, write focused tests for it, and
-  verify your work before handing it to the L3 test engineer.
+- The runtime TDD harness runs first: test phase (tests only, must fail), then
+  implement phase (tests locked by hash; production code only).
+- Implement just that one technical_sub_task and verify your work before handing
+  it to the L3 test engineer.
 - Follow the same engineering discipline as a careful senior engineer: think
   before coding, write the minimum code needed, make surgical changes, match the
   existing style, and remove only unused code your own changes created.
