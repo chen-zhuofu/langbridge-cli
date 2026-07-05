@@ -240,7 +240,7 @@ def run_l4_component(api_key, model, arguments, trace_sink=None, run_log_path=No
     feedback = arguments.get("feedback", "")
 
     snapshot = workspace_git.snapshot_head()
-    early, impl_session, l4_report, locked = _run_worker_tdd(
+    early, impl_session, l4_report, acceptance = _run_worker_tdd(
         api_key,
         model,
         task,
@@ -259,10 +259,10 @@ def run_l4_component(api_key, model, arguments, trace_sink=None, run_log_path=No
         workspace_git.revert_snapshot(snapshot)
         return early
 
-    ok, lock_msg = tdd_harness.verify_locked_unchanged(locked)
+    ok, gate_msg = _verify_acceptance_if_present(acceptance)
     if not ok:
         workspace_git.revert_snapshot(snapshot)
-        return pm_review_result(l4_report, lock_msg, "NEEDS_WORK")
+        return pm_review_result(l4_report, gate_msg, "NEEDS_WORK")
 
     start_worklog(run_log_path, task)
     append_worklog_entry(run_log_path, "L4 engineer", l4_report, "ready")
@@ -273,17 +273,32 @@ def run_l4_component(api_key, model, arguments, trace_sink=None, run_log_path=No
     for _ in range(MAX_L4_L3_TURNS):
         if over_time_budget(start_time, MAX_L4_L3_SECONDS):
             break
-        ok, lock_msg = tdd_harness.verify_locked_unchanged(locked)
+        ok, gate_msg = _verify_acceptance_if_present(acceptance)
         if not ok:
-            append_worklog_entry(run_log_path, "TDD harness", lock_msg, "failure")
+            append_worklog_entry(run_log_path, "TDD harness", gate_msg, "failure")
             workspace_git.revert_snapshot(snapshot)
-            return pm_review_result(l4_report, lock_msg, "NEEDS_WORK")
-        l3_report = run_l3_test_engineer(api_key, model, task, pm_l3_review_context(context, l4_report), session=l3)
+            return pm_review_result(l4_report, gate_msg, "NEEDS_WORK")
+        l3_report = run_l3_test_engineer(
+            api_key,
+            model,
+            task,
+            pm_l3_review_context(context, l4_report, acceptance=acceptance),
+            session=l3,
+        )
         if l3_review_passed(l3_report):
-            append_worklog_entry(run_log_path, "L3 test engineer", l3_report, "pass")
-            workspace_git.commit_task("L4", task)
-            return pm_review_result(l4_report, l3_report, "OK")
-        append_worklog_entry(run_log_path, "L3 test engineer", l3_report, "concern exist")
+            ok, gate_msg = _verify_acceptance_if_present(acceptance)
+            if ok:
+                append_worklog_entry(run_log_path, "L3 test engineer", l3_report, "pass")
+                workspace_git.commit_task("L4", task)
+                return pm_review_result(l4_report, l3_report, "OK")
+            append_worklog_entry(run_log_path, "Acceptance gate", gate_msg, "failure")
+            l3_report = (
+                "L3_STATUS: NEEDS_WORK\n"
+                "Tests: acceptance gate failed after L3 PASS\n"
+                f"Summary: {gate_msg}"
+            )
+        else:
+            append_worklog_entry(run_log_path, "L3 test engineer", l3_report, "concern exist")
 
         l4_report = run_l4_engineer(
             api_key,
@@ -292,7 +307,7 @@ def run_l4_component(api_key, model, arguments, trace_sink=None, run_log_path=No
             context,
             l3_report,
             session=impl_session,
-            user_prompt=tdd_harness.implement_phase_user_prompt(task, context, locked, l3_report, "L4"),
+            user_prompt=tdd_harness.implement_phase_user_prompt(task, context, acceptance, l3_report, "L4"),
         )
         if not l4_ready_for_review(l4_report):
             append_worklog_entry(run_log_path, "L4 engineer", l4_report, "needs pm")
@@ -319,9 +334,10 @@ def _run_worker_tdd(
     run_log_path,
     turn_id,
 ):
-    """Return (early_report, impl_session, impl_report, locked_hashes).
+    """Return (early_report, impl_session, impl_report, acceptance_spec).
 
     When early_report is not None the caller should return it immediately.
+    acceptance_spec is the frozen test.json dict (empty when TDD is bypassed).
     """
     from langbridge_cli.agents import tdd_harness
 
@@ -349,7 +365,7 @@ def _run_worker_tdd(
         return f"{worker_label}_STATUS: IN_PROGRESS\nSummary: {red_msg}", None, None, None
 
     locked = tdd_harness.lock_hashes(test_paths)
-    tdd_harness.save_lock(task, locked)
+    acceptance = tdd_harness.write_test_json(task, locked)
     write_guard = lambda tool, args: tdd_harness.implement_phase_guard(locked, tool, args)
     impl_session = new_session_fn(api_key, model, write_guard=write_guard, **session_kwargs)
     impl_report = run_engineer_fn(
@@ -359,11 +375,22 @@ def _run_worker_tdd(
         context,
         feedback,
         session=impl_session,
-        user_prompt=tdd_harness.implement_phase_user_prompt(task, context, locked, feedback, worker_label),
+        user_prompt=tdd_harness.implement_phase_user_prompt(task, context, acceptance, feedback, worker_label),
     )
     if not ready_fn(impl_report):
         return impl_report, None, None, None
-    return None, impl_session, impl_report, locked
+    green_ok, green_msg = tdd_harness.verify_green_gate(acceptance)
+    if not green_ok:
+        return f"{worker_label}_STATUS: IN_PROGRESS\nSummary: {green_msg}", None, None, None
+    return None, impl_session, impl_report, acceptance
+
+
+def _verify_acceptance_if_present(acceptance: dict) -> tuple[bool, str]:
+    from langbridge_cli.agents import tdd_harness
+
+    if not acceptance.get("paths"):
+        return True, ""
+    return tdd_harness.verify_acceptance(acceptance)
 
 
 def pm_review_result(l4_report, l3_report, pm_status):
@@ -412,7 +439,7 @@ def run_l5_component(api_key, model, arguments, trace_sink=None, run_log_path=No
 
         from langbridge_cli.agents.multi_agent import l5_ready_for_review, new_l5_session, run_l5_engineer
 
-        early, l5, l5_output, locked = _run_worker_tdd(
+        early, l5, l5_output, acceptance = _run_worker_tdd(
             api_key,
             model,
             sub_task,
@@ -437,7 +464,7 @@ def run_l5_component(api_key, model, arguments, trace_sink=None, run_log_path=No
             )
 
         accepted, _, review = run_l5_review_loop(
-            api_key, model, sub_task, sub_context, l5_output, l5, locked, trace_sink, run_log_path, turn_id, approval_callback
+            api_key, model, sub_task, sub_context, l5_output, l5, acceptance, trace_sink, run_log_path, turn_id, approval_callback
         )
         if not accepted:
             return _l5_fail_sub_task(
@@ -501,7 +528,7 @@ def refine_failed_sub_task(
     return replace_sub_task(sub_tasks, index, new_items)
 
 
-def run_l5_review_loop(api_key, model, sub_task, context, l5_output, l5, locked, trace_sink, run_log_path, turn_id, approval_callback):
+def run_l5_review_loop(api_key, model, sub_task, context, l5_output, l5, acceptance, trace_sink, run_log_path, turn_id, approval_callback):
     """One living L5 and one living L3 trade review turns until the sub-task passes or limits trip."""
     from langbridge_cli.agents import tdd_harness
     from langbridge_cli.agents.multi_agent import (
@@ -521,15 +548,30 @@ def run_l5_review_loop(api_key, model, sub_task, context, l5_output, l5, locked,
     for _ in range(MAX_L4_L3_TURNS):
         if over_time_budget(start_time, MAX_L4_L3_SECONDS):
             break
-        ok, lock_msg = tdd_harness.verify_locked_unchanged(locked)
+        ok, gate_msg = _verify_acceptance_if_present(acceptance)
         if not ok:
-            append_worklog_entry(run_log_path, "TDD harness", lock_msg, "failure", "L5")
-            return False, l5_report, lock_msg
-        l3_report = run_l3_test_engineer(api_key, model, sub_task, pm_l3_review_context(context, l5_report, "L5"), session=l3)
+            append_worklog_entry(run_log_path, "TDD harness", gate_msg, "failure", "L5")
+            return False, l5_report, gate_msg
+        l3_report = run_l3_test_engineer(
+            api_key,
+            model,
+            sub_task,
+            pm_l3_review_context(context, l5_report, "L5", acceptance=acceptance),
+            session=l3,
+        )
         if l3_review_passed(l3_report):
-            append_worklog_entry(run_log_path, "L3 test engineer", l3_report, "pass", "L5")
-            return True, l5_report, l3_report
-        append_worklog_entry(run_log_path, "L3 test engineer", l3_report, "concern exist", "L5")
+            ok, gate_msg = _verify_acceptance_if_present(acceptance)
+            if ok:
+                append_worklog_entry(run_log_path, "L3 test engineer", l3_report, "pass", "L5")
+                return True, l5_report, l3_report
+            append_worklog_entry(run_log_path, "Acceptance gate", gate_msg, "failure", "L5")
+            l3_report = (
+                "L3_STATUS: NEEDS_WORK\n"
+                "Tests: acceptance gate failed after L3 PASS\n"
+                f"Summary: {gate_msg}"
+            )
+        else:
+            append_worklog_entry(run_log_path, "L3 test engineer", l3_report, "concern exist", "L5")
 
         l5_report = run_l5_engineer(
             api_key,
@@ -538,7 +580,7 @@ def run_l5_review_loop(api_key, model, sub_task, context, l5_output, l5, locked,
             context,
             l3_report,
             session=l5,
-            user_prompt=tdd_harness.implement_phase_user_prompt(sub_task, context, locked, l3_report, "L5"),
+            user_prompt=tdd_harness.implement_phase_user_prompt(sub_task, context, acceptance, l3_report, "L5"),
         )
         if not l5_ready_for_review(l5_report):
             append_worklog_entry(run_log_path, "L5 engineer", l5_report, "needs pm", "L5")
@@ -595,8 +637,12 @@ def l5_component_result(task, sub_tasks, status, note):
     return f"{summary}\n\nPM_REVIEW_STATUS: {status}"
 
 
-def pm_l3_review_context(context, worker_output, worker_label="L4"):
+def pm_l3_review_context(context, worker_output, worker_label="L4", acceptance=None):
+    from langbridge_cli.agents import tdd_harness
+
     parts = []
+    if acceptance and acceptance.get("paths"):
+        parts.append(tdd_harness.acceptance_context_block(acceptance))
     if context:
         parts.append(context)
     parts.append(f"{worker_label} completed work and is ready for PM-triggered L3 review.")
