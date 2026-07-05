@@ -17,7 +17,7 @@ This is distinct from the two other records:
 
 import json
 
-from langbridge_cli import config
+from langbridge_cli import settings
 from langbridge_cli.llm.parse import extract_output_text, extract_reasoning_summaries
 from langbridge_cli.llm.tool_schema import TOOL_PURPOSE_ARGUMENT
 
@@ -60,7 +60,7 @@ def worklog_path(run_log_path, label, instance_id=None):
     if entry is None:
         return None
     dir_attr, prefix = entry
-    run_dir = getattr(config, dir_attr) / run_log_path.stem
+    run_dir = getattr(settings, dir_attr) / run_log_path.stem
     name = f"{prefix}.md" if instance_id is None else f"{prefix}_{instance_id}.md"
     return run_dir / name
 

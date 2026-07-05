@@ -1,9 +1,8 @@
 import json
 from pathlib import Path
 
+from langbridge_cli.settings import MAX_FILE_BYTES, MAX_SEARCH_FILE_BYTES
 
-MAX_FILE_BYTES = 20_000
-MAX_SEARCH_FILE_BYTES = 200_000
 WORKSPACE_ROOT = Path.cwd().resolve()
 SEARCH_SKIP_DIRS = {".git", ".venv", "__pycache__", "build", "dist", "session-history"}
 

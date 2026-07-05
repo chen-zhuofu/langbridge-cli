@@ -13,7 +13,7 @@ from textual.widgets import OptionList, RichLog, Static, TextArea
 
 from langbridge_cli.agents import control
 from langbridge_cli.agents.agent import run_pm_loop
-from langbridge_cli.config import (
+from langbridge_cli.settings import (
     COMPACT_WHEN_TOKENS_OVER,
     DEFAULT_MODEL,
     MAX_AGENT_CONTEXT_TOKENS,

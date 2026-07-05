@@ -1,14 +1,12 @@
 import json
 import sys
 
-from openai import OpenAI, OpenAIError
-
-from langbridge_cli.config import (
+from langbridge_cli.llm.client import create_model_response
+from langbridge_cli.settings import (
     MAX_SPECIALIST_AGENT_STEPS,
     MAX_SPECIALIST_CONTEXT_TOKENS,
     MAX_SPECIALIST_SECONDS,
 )
-from langbridge_cli.llm.debug import print_llm_request, print_llm_response
 from langbridge_cli.llm.parse import extract_output_text, print_step_trace
 from langbridge_cli.agents.roles import L3_TEST_ENGINEER_PROMPT, L4_ENGINEER_PROMPT, L5_ENGINEER_PROMPT
 from langbridge_cli.skills import skill_catalog_text
@@ -271,21 +269,14 @@ def new_l5_session(api_key, model, trace_sink=None, approval_callback=None, run_
 
 
 def create_specialist_response(api_key, model, messages, tool_schemas, label):
-    client = OpenAI(api_key=api_key)
-    print_llm_request(label, model, messages, tool_schemas)
-    try:
-        response = client.responses.create(
-            model=model,
-            input=messages,
-            tools=tool_schemas,
-            reasoning={"summary": "auto"},
-        )
-    except OpenAIError as error:
-        raise RuntimeError(str(error))
-
-    data = response.model_dump(exclude_none=True)
-    print_llm_response(label, data)
-    return data
+    return create_model_response(
+        api_key,
+        model,
+        messages,
+        tool_schemas=tool_schemas,
+        reasoning={"summary": "auto"},
+        label=label,
+    )
 
 
 def run_specialist_tool_call(call, tools, label, approval_callback=None):

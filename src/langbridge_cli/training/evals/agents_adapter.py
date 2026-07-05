@@ -23,6 +23,7 @@ import subprocess
 import sys
 import tempfile
 
+from langbridge_cli.settings import EVAL_LAYER_TIMEOUT_SECONDS
 from langbridge_cli.training import bench
 
 _SRC = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
@@ -44,7 +45,7 @@ def _capture_diff(worktree):
     return bench.split_diff(out)  # drop any test-file hunks the agent added
 
 
-def _run_layer(worktree, layer, task, context="", model=None, timeout=1800):
+def _run_layer(worktree, layer, task, context="", model=None, timeout=EVAL_LAYER_TIMEOUT_SECONDS):
     scratch = tempfile.mkdtemp(prefix="lb_eval_state_")
     extra = {"LANGBRIDGE_LAYER": layer, "LANGBRIDGE_TASK": task,
              "LANGBRIDGE_CONTEXT": context}
@@ -104,7 +105,7 @@ def _parse_worklog(path, final_diff):
 # --------------------------------------------------------------------------- #
 # The injectable callables.                                                    #
 # --------------------------------------------------------------------------- #
-def make_callables(repo=None, model=None, timeout=1800):
+def make_callables(repo=None, model=None, timeout=EVAL_LAYER_TIMEOUT_SECONDS):
     repo = repo or bench.TARGET_REPO
 
     def _worktree(spec):

@@ -28,9 +28,9 @@ def auto_approve(label, name, arguments):
 def _shared_worklog_path(run_log_path):
     """Best-effort: find the L4/L5<->L3 shared worklog this run produced."""
     try:
-        from langbridge_cli import config
+        from langbridge_cli import settings
 
-        for d in (config.L4_WORKLOG_DIR, config.L5_WORKLOG_DIR):
+        for d in (settings.L4_WORKLOG_DIR, settings.L5_WORKLOG_DIR):
             if not os.path.isdir(d):
                 continue
             hits = []
@@ -55,7 +55,7 @@ def main():
         print(json.dumps({"error": "no task"}))
         return 1
 
-    from langbridge_cli.config import DEFAULT_MODEL, load_api_key
+    from langbridge_cli.settings import DEFAULT_MODEL, load_api_key
     from langbridge_cli.persistence.session import create_run_log_path
 
     api_key = load_api_key()

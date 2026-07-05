@@ -1,6 +1,6 @@
 import os
 
-from langbridge_cli.config import DEFAULT_MODEL, load_api_key
+from langbridge_cli.settings import DEFAULT_MODEL, load_api_key
 from langbridge_cli.agents.multi_agent import run_l3_test_engineer
 
 

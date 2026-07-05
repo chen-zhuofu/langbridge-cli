@@ -1,6 +1,6 @@
 import json
 
-from langbridge_cli.config import (
+from langbridge_cli.settings import (
     COMPACT_WHEN_TOKENS_OVER,
     MAX_TOOL_SUMMARY_OUTPUT_CHARS,
     RECENT_CONTEXT_TOKENS,

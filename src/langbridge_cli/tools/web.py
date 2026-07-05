@@ -4,9 +4,12 @@ from html.parser import HTMLParser
 
 import httpx
 
-DEFAULT_TIMEOUT_SECONDS = 30
-MAX_TIMEOUT_SECONDS = 120
-MAX_WEBPAGE_CHARS = 20_000
+from langbridge_cli.settings import (
+    DEFAULT_WEB_TIMEOUT_SECONDS,
+    MAX_WEB_TIMEOUT_SECONDS,
+    MAX_WEBPAGE_CHARS,
+)
+
 USER_AGENT = "langbridge-cli/0.1 (+webpage reader)"
 
 # Tags whose text content is markup/scripts, not readable page content.
@@ -42,7 +45,7 @@ TOOL_SCHEMAS = [
                 "timeout_seconds": {
                     "type": "integer",
                     "description": "Maximum time to wait for the request.",
-                    "default": DEFAULT_TIMEOUT_SECONDS,
+                    "default": DEFAULT_WEB_TIMEOUT_SECONDS,
                 },
             },
             "required": ["url"],
@@ -63,10 +66,10 @@ def tool(name):
 
 
 @tool("read_webpage")
-def read_webpage(url, max_chars=MAX_WEBPAGE_CHARS, timeout_seconds=DEFAULT_TIMEOUT_SECONDS):
+def read_webpage(url, max_chars=MAX_WEBPAGE_CHARS, timeout_seconds=DEFAULT_WEB_TIMEOUT_SECONDS):
     url = validate_url(url)
     limit = max(1, int(max_chars))
-    timeout = max(1, min(int(timeout_seconds), MAX_TIMEOUT_SECONDS))
+    timeout = max(1, min(int(timeout_seconds), MAX_WEB_TIMEOUT_SECONDS))
 
     with httpx.Client(
         follow_redirects=True,

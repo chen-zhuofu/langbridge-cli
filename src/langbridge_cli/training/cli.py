@@ -17,7 +17,13 @@ import argparse
 import os
 
 from langbridge_cli import policy
-from langbridge_cli.config import DEFAULT_MODEL, load_api_key
+from langbridge_cli.settings import (
+    DEFAULT_MODEL,
+    TRAIN_DEFAULT_BATCH_SIZE,
+    TRAIN_DEFAULT_CHECKPOINT_EVERY,
+    TRAIN_DEFAULT_EPOCHS,
+    load_api_key,
+)
 from langbridge_cli.training import bench, evolver, langbridge_bench, metrics
 from langbridge_cli.training.evals import agents_adapter, runner
 from langbridge_cli.training.l3_cases import l3_cases_from_specs
@@ -136,10 +142,10 @@ def main():
                     help="langbridge-bench (default), swebench (alias), or local git specs")
     pt.add_argument("--model", default=None, help="agent model")
     pt.add_argument("--evolver-model", default=None, help="model for the evolver itself")
-    pt.add_argument("--epochs", type=int, default=1)
-    pt.add_argument("--batch-size", type=int, default=2)
+    pt.add_argument("--epochs", type=int, default=TRAIN_DEFAULT_EPOCHS)
+    pt.add_argument("--batch-size", type=int, default=TRAIN_DEFAULT_BATCH_SIZE)
     pt.add_argument("--no-gate", action="store_true", help="skip the acceptance gate")
-    pt.add_argument("--checkpoint-every", default="batch", choices=["batch", "epoch"])
+    pt.add_argument("--checkpoint-every", default=TRAIN_DEFAULT_CHECKPOINT_EVERY, choices=["batch", "epoch"])
     pt.add_argument("--limit", type=int, default=0)
     pt.set_defaults(func=cmd_train)
 

@@ -3,11 +3,13 @@ import subprocess
 import sys
 from pathlib import Path
 
+from langbridge_cli.settings import (
+    DEFAULT_TEST_TIMEOUT_SECONDS,
+    MAX_TEST_OUTPUT_CHARS,
+    MAX_TEST_TIMEOUT_SECONDS,
+)
 
 WORKSPACE_ROOT = Path.cwd().resolve()
-MAX_TEST_OUTPUT_CHARS = 20_000
-DEFAULT_TEST_TIMEOUT_SECONDS = 60
-MAX_TEST_TIMEOUT_SECONDS = 300
 
 TOOL_SCHEMAS = [
     {

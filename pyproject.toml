@@ -24,6 +24,9 @@ where = ["src"]
 requires = ["setuptools>=69"]
 build-backend = "setuptools.build_meta"
 
+[tool.setuptools.package-data]
+langbridge_cli = ["config.json"]
+
 [dependency-groups]
 dev = [
     "pytest>=9.0.3",

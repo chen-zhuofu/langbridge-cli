@@ -23,6 +23,11 @@ import datetime
 import json
 
 from langbridge_cli import policy
+from langbridge_cli.settings import (
+    TRAIN_DEFAULT_BATCH_SIZE,
+    TRAIN_DEFAULT_CHECKPOINT_EVERY,
+    TRAIN_DEFAULT_EPOCHS,
+)
 from langbridge_cli.training import gate, signals
 
 
@@ -175,7 +180,8 @@ def process_batch(specs, *, loop_fn, grade, evolve_fn, jury_fn=None, judge=None,
 
 
 def run(specs, *, loop_fn, grade, evolve_fn, jury_fn=None, judge=None,
-        epochs=1, batch_size=2, do_gate=True, checkpoint_every="batch", log=None):
+        epochs=TRAIN_DEFAULT_EPOCHS, batch_size=TRAIN_DEFAULT_BATCH_SIZE,
+        do_gate=True, checkpoint_every=TRAIN_DEFAULT_CHECKPOINT_EVERY, log=None):
     """Drive the full outer loop. Returns a list of per-batch results."""
     results = []
     for epoch in range(1, epochs + 1):
@@ -202,20 +208,20 @@ def _has_changes(changes):
 # Default evolver LLM (wired, not unit-tested — needs an API key/model).       #
 # --------------------------------------------------------------------------- #
 def make_evolve_fn(api_key, model):
-    """Return evolve_fn(prompt) -> proposal dict using the OpenAI Responses API."""
-    from openai import OpenAI
-
-    client = OpenAI(api_key=api_key)
+    """Return evolve_fn(prompt) -> proposal dict using the configured LLM API."""
+    from langbridge_cli.llm.client import create_model_response
 
     def evolve_fn(prompt):
-        resp = client.responses.create(
-            model=model,
-            input=[
+        data = create_model_response(
+            api_key,
+            model,
+            [
                 {"role": "system", "content": EVOLVER_SYSTEM},
                 {"role": "user", "content": prompt},
             ],
+            label="evolver",
         )
-        text = _extract_text(resp.model_dump(exclude_none=True))
+        text = _extract_text(data)
         return _parse_json(text)
 
     return evolve_fn

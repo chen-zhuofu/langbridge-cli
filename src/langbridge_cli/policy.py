@@ -34,6 +34,8 @@ import re
 import shutil
 from pathlib import Path
 
+from langbridge_cli.settings import DEFAULT_MAX_GUIDANCE
+
 # The four roles in this repo's loop-engineering architecture.
 ROLES = ("pm", "l4", "l5", "l3")
 # Skill targets the evolver may use; expanded to concrete roles by skills_for().
@@ -44,7 +46,7 @@ _TARGET_ALIASES = {
     "all": ROLES,
 }
 
-MAX_GUIDANCE = int(os.environ.get("LANGBRIDGE_MAX_GUIDANCE", "12"))
+MAX_GUIDANCE = int(os.environ.get("LANGBRIDGE_MAX_GUIDANCE", str(DEFAULT_MAX_GUIDANCE)))
 
 
 def _default_policy_dir() -> str:

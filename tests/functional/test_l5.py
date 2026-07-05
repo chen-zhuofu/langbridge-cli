@@ -100,7 +100,7 @@ def test_l5_escalates_to_pm_when_a_sub_task_keeps_failing(tmp_path, monkeypatch)
 
 def test_l5_push_back_goes_to_jury_and_passes(tmp_path, monkeypatch):
     _use_tmp_plans(monkeypatch, tmp_path / "plans")
-    monkeypatch.setattr("langbridge_cli.config.L5_WORKLOG_DIR", tmp_path)
+    monkeypatch.setattr("langbridge_cli.settings.L5_WORKLOG_DIR", tmp_path)
     l5_outputs = iter(["- [ ] only step", READY, PUSH_BACK])
     l3_outputs = iter([NEEDS_WORK, NEEDS_WORK, PASS, PASS])
 
@@ -126,7 +126,7 @@ def test_l5_push_back_goes_to_jury_and_passes(tmp_path, monkeypatch):
 
 def test_l5_records_the_worklog(tmp_path, monkeypatch):
     _use_tmp_plans(monkeypatch, tmp_path / "plans")
-    monkeypatch.setattr("langbridge_cli.config.L5_WORKLOG_DIR", tmp_path)
+    monkeypatch.setattr("langbridge_cli.settings.L5_WORKLOG_DIR", tmp_path)
     plan = "- [ ] only step"
     calls = {"l5": 0}
 

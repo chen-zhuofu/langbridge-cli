@@ -17,7 +17,7 @@ When there is no active run (run_log_path is None, e.g. in unit tests) the write
 is a no-op so it never litters the workspace.
 """
 
-from langbridge_cli import config
+from langbridge_cli import settings
 
 
 # (run, worker_label) -> negotiations opened so far / the currently open one.
@@ -31,8 +31,8 @@ def _key(run_log_path, worker_label):
 
 def _worklog_dir(worker_label):
     if worker_label == "L5":
-        return config.L5_WORKLOG_DIR
-    return config.L4_WORKLOG_DIR
+        return settings.L5_WORKLOG_DIR
+    return settings.L4_WORKLOG_DIR
 
 
 def _worklog_filename(worker_label, negotiation_id):

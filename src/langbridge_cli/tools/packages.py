@@ -2,11 +2,13 @@ import json
 import subprocess
 from pathlib import Path
 
+from langbridge_cli.settings import (
+    DEFAULT_INSTALL_TIMEOUT_SECONDS,
+    MAX_INSTALL_OUTPUT_CHARS,
+    MAX_INSTALL_TIMEOUT_SECONDS,
+)
 
 WORKSPACE_ROOT = Path.cwd().resolve()
-MAX_INSTALL_OUTPUT_CHARS = 20_000
-DEFAULT_INSTALL_TIMEOUT_SECONDS = 300
-MAX_INSTALL_TIMEOUT_SECONDS = 1200
 
 TOOL_SCHEMAS = [
     {

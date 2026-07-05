@@ -9,7 +9,7 @@ def test_worklog_writes_nothing_without_an_active_run():
 
 
 def test_worklog_appends_to_one_instance_file(tmp_path, monkeypatch):
-    monkeypatch.setattr("langbridge_cli.config.L4_WORKLOG_DIR", tmp_path)
+    monkeypatch.setattr("langbridge_cli.settings.L4_WORKLOG_DIR", tmp_path)
     run_log = tmp_path / "session.json"
     instance_id = 1
 
@@ -41,7 +41,7 @@ def test_worklog_appends_to_one_instance_file(tmp_path, monkeypatch):
 
 
 def test_distinct_instances_get_distinct_files(tmp_path, monkeypatch):
-    monkeypatch.setattr("langbridge_cli.config.L3_WORKLOG_DIR", tmp_path)
+    monkeypatch.setattr("langbridge_cli.settings.L3_WORKLOG_DIR", tmp_path)
     run_log = tmp_path / "session.json"
 
     first = agent_worklog.new_worklog_id(run_log, "L3 test engineer")

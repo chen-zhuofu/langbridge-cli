@@ -103,7 +103,7 @@ def test_loop_stops_when_l4_can_no_longer_deliver(monkeypatch):
 
 
 def test_worklog_records_negotiation(tmp_path, monkeypatch):
-    monkeypatch.setattr("langbridge_cli.config.L4_WORKLOG_DIR", tmp_path)
+    monkeypatch.setattr("langbridge_cli.settings.L4_WORKLOG_DIR", tmp_path)
 
     def fake_l3(api_key, model, task, context, **kwargs):
         return PASS

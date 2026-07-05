@@ -4,9 +4,8 @@ import json
 import re
 import sys
 
-from openai import OpenAI, OpenAIError
-
-from langbridge_cli.config import (
+from langbridge_cli.llm.client import create_model_response
+from langbridge_cli.settings import (
     MAX_AGENT_CONTEXT_TOKENS,
     MAX_AGENT_SECONDS,
     MAX_AGENT_STEPS,
@@ -17,7 +16,6 @@ from langbridge_cli.config import (
     MAX_PM_SECONDS,
     WRITE_TOOLS,
 )
-from langbridge_cli.llm.debug import print_llm_request, print_llm_response
 from langbridge_cli.agents.roles import SYSTEM_PROMPT
 from langbridge_cli import policy
 from langbridge_cli.tools.plan import read_todo_list
@@ -183,21 +181,14 @@ def finish_pm(input, finished, run_log_path, turn_id, print_reply, worklog_id=No
 
 
 def create_response(api_key, model, agent_input):
-    client = OpenAI(api_key=api_key)
-    print_llm_request("PM agent", model, agent_input, MAIN_TOOL_SCHEMAS)
-    try:
-        response = client.responses.create(
-            model=model,
-            input=agent_input,
-            tools=MAIN_TOOL_SCHEMAS,
-            reasoning={"summary": "auto"},
-        )
-    except OpenAIError as error:
-        raise RuntimeError(str(error))
-
-    data = response.model_dump(exclude_none=True)
-    print_llm_response("PM agent", data)
-    return data
+    return create_model_response(
+        api_key,
+        model,
+        agent_input,
+        tool_schemas=MAIN_TOOL_SCHEMAS,
+        reasoning={"summary": "auto"},
+        label="PM agent",
+    )
 
 
 def run_tool_call(call, api_key=None, model=None, trace_sink=None, approval_callback=None, run_log_path=None, turn_id=None):

@@ -2,7 +2,7 @@ import os
 import sys
 
 from langbridge_cli.agents.agent import run_pm_loop
-from langbridge_cli.config import DEFAULT_MODEL, load_api_key
+from langbridge_cli.settings import DEFAULT_MODEL, load_api_key
 from langbridge_cli.persistence.session import create_run_log_path
 
 

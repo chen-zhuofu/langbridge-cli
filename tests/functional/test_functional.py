@@ -9,7 +9,7 @@ import copy
 import json
 
 from langbridge_cli.agents.agent import run_pm_loop, run_tool_call
-from langbridge_cli.config import MAX_PM_SECONDS
+from langbridge_cli.settings import MAX_PM_SECONDS
 
 
 def _message(text):

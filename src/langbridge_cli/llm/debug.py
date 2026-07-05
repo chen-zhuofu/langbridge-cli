@@ -1,11 +1,11 @@
 import json
 import os
 
+from langbridge_cli.settings import DEFAULT_DEBUG_MAX_CHARS
 from langbridge_cli.llm.parse import extract_output_text, truncate_text
 from langbridge_cli.llm.tool_schema import TOOL_PURPOSE_ARGUMENT
 
 
-DEFAULT_DEBUG_MAX_CHARS = 200
 DEBUG_AGENT_LABELS = {"PM agent", "L4 engineer", "L3 test engineer"}
 
 

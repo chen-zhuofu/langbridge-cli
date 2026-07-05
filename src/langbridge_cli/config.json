@@ -1,0 +1,76 @@
+{
+  "model": "kimi-k2.7-code",
+  "api": {
+    "provider": "moonshot",
+    "base_url": "https://api.moonshot.ai/v1"
+  },
+  "api_keys": {
+    "moonshot": null,
+    "openai": null
+  },
+  "max_guidance": 12,
+  "agent": {
+    "max_pm_loops": 20,
+    "max_agent_steps": 50,
+    "max_specialist_agent_steps": 30,
+    "max_l4_l3_turns": 5,
+    "max_l5_ralph_turns": 8,
+    "max_pm_seconds": 3600,
+    "max_agent_seconds": 1800,
+    "max_specialist_seconds": 900,
+    "max_l4_l3_seconds": 1800
+  },
+  "context": {
+    "max_agent_context_tokens": 120000,
+    "max_specialist_context_tokens": 120000,
+    "max_tool_summary_output_chars": 300,
+    "max_session_choices": 10,
+    "max_session_summary_input_chars": 4000,
+    "compact_when_tokens_over": 60000,
+    "recent_context_tokens": 40000,
+    "summary_target_chars": 8000,
+    "stale_tool_output_chars": 500
+  },
+  "tools": {
+    "filesystem": {
+      "max_file_bytes": 20000,
+      "max_search_file_bytes": 200000
+    },
+    "execution": {
+      "max_output_chars": 20000,
+      "default_timeout_seconds": 60,
+      "max_timeout_seconds": 300
+    },
+    "testing": {
+      "max_output_chars": 20000,
+      "default_timeout_seconds": 60,
+      "max_timeout_seconds": 300
+    },
+    "packages": {
+      "max_output_chars": 20000,
+      "default_timeout_seconds": 300,
+      "max_timeout_seconds": 1200
+    },
+    "web": {
+      "default_timeout_seconds": 30,
+      "max_timeout_seconds": 120,
+      "max_webpage_chars": 20000
+    },
+    "debug": {
+      "default_max_chars": 200
+    }
+  },
+  "training": {
+    "default_epochs": 1,
+    "default_batch_size": 2,
+    "default_checkpoint_every": "batch",
+    "eval_layer_timeout_seconds": 1800,
+    "grade_timeout_seconds": 600
+  },
+  "paths": {
+    "agent_state_dir": null,
+    "runs_dir": null,
+    "todo_list_path": null,
+    "component_plan_dir": null
+  }
+}

@@ -1,4 +1,4 @@
-# langbridge-bench — self-built benchmark from GitHub PRs
+# Langbridge-bench — self-built benchmark from GitHub PRs
 
 Turns real, merged GitHub pull requests into training/eval tasks in the
 **SWE-bench schema** (same fields as public SWE-bench). Each task is one bug fix:

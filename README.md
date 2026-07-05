@@ -1,6 +1,6 @@
 <img src="assets/Langbridge_Logotype_Horizontal.svg" alt="langbridge-cli" width="360">
 
-A self-evolving, multi-agent coding CLI backed by a Codex model.
+A self-evolving, multi-agent coding CLI backed by Kimi (default) or OpenAI models.
 
 Langbridge runs a PM-led, multi-agent coding loop. The PM inspects the
 workspace, plans the work, and delegates implementation to specialist agents
@@ -274,9 +274,34 @@ Training eval/train reads `evals/langbridge-bench/specs/` by default. See
 
 ## Run
 
-On first run, `langbridge-cli` asks for your Codex API key and saves it to
-`~/.langbridge/config.json`. You can still override it with `OPENAI_API_KEY`.
-Use `LANGBRIDGE_MODEL` to override the default model.
+On first run, `langbridge-cli` asks for an API key and saves it to
+`~/.langbridge/config.json` under `api_keys.<provider>`. Both Kimi and OpenAI
+keys can live side by side:
+
+```json
+{
+  "api_keys": {
+    "moonshot": "sk-...",
+    "openai": "sk-..."
+  }
+}
+```
+
+Environment overrides still work: `MOONSHOT_API_KEY` / `KIMI_API_KEY` for Kimi,
+`OPENAI_API_KEY` for OpenAI. Use `LANGBRIDGE_MODEL` to override the default
+model (`kimi-k2.7-code`). Switch providers with `api.provider` in config or
+`LANGBRIDGE_API_PROVIDER=openai`.
+
+Defaults ship in `src/langbridge_cli/config.json` (provider `moonshot`,
+base URL `https://api.moonshot.ai/v1`). Copy any section into
+`~/.langbridge/config.json` to override. To switch back to OpenAI:
+
+```json
+{
+  "model": "gpt-5.1-codex",
+  "api": { "provider": "openai", "base_url": "" }
+}
+```
 
 ### Textual UI (default)
 
@@ -342,7 +367,7 @@ LANGBRIDGE_TERMINAL=1 uv run --no-editable langbridge
 Override the default model:
 
 ```bash
-LANGBRIDGE_TERMINAL=1 LANGBRIDGE_MODEL=gpt-5.1-codex uv run --no-editable langbridge
+LANGBRIDGE_TERMINAL=1 uv run --no-editable langbridge
 ```
 
 Install locally to get the `langbridge` command:

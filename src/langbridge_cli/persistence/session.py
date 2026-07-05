@@ -2,14 +2,12 @@ import json
 import sys
 from datetime import datetime
 
-from openai import OpenAI
-
-from langbridge_cli.config import (
+from langbridge_cli.llm.client import create_model_response
+from langbridge_cli.settings import (
     MAX_SESSION_CHOICES,
     MAX_SESSION_SUMMARY_INPUT_CHARS,
     RUNS_DIR,
 )
-from langbridge_cli.llm.debug import print_llm_request, print_llm_response
 from langbridge_cli.llm.parse import extract_output_text, truncate_text
 
 
@@ -111,12 +109,7 @@ def create_session_summary(api_key, model, records):
 
 
 def create_text_response(api_key, model, agent_input):
-    client = OpenAI(api_key=api_key)
-    print_llm_request("session summary", model, agent_input)
-    response = client.responses.create(model=model, input=agent_input)
-    data = response.model_dump(exclude_none=True)
-    print_llm_response("session summary", data)
-    return data
+    return create_model_response(api_key, model, agent_input, label="session summary")
 
 
 def session_summary_input(records):

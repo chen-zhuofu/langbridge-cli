@@ -15,6 +15,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+from langbridge_cli.settings import EVAL_LAYER_TIMEOUT_SECONDS, GRADE_TIMEOUT_SECONDS
 from langbridge_cli.training import bench
 
 _TEST_PATH_RE = re.compile(
@@ -78,7 +79,8 @@ class Workspaces:
         return self._ready[tid]
 
     def reset(self, repo_dir):
-        subprocess.run(["git", "checkout", "--", "."], cwd=repo_dir, capture_output=True, text=True)
+        # capture_diff() stages via `git add`; reset must drop the index too.
+        subprocess.run(["git", "reset", "--hard", "HEAD"], cwd=repo_dir, capture_output=True, text=True)
         subprocess.run(["git", "clean", "-fdq", "-e", ".refvenv"], cwd=repo_dir,
                        capture_output=True, text=True)
 
@@ -90,7 +92,7 @@ class Workspaces:
         return _strip_test_hunks(out, test_files)
 
 
-def make_grader(workspaces, specs_directory=None, timeout=600):
+def make_grader(workspaces, specs_directory=None, timeout=GRADE_TIMEOUT_SECONDS):
     ref = _ref()
     directory = specs_directory or SPECS_DIR
     by_id = {s["task_id"]: s for s in bench.list_specs(directory=directory, ok_only=True)}
@@ -122,7 +124,7 @@ def make_grader(workspaces, specs_directory=None, timeout=600):
     return grade
 
 
-def _run_layer(py, repo_dir, layer, task, context="", model=None, timeout=1800):
+def _run_layer(py, repo_dir, layer, task, context="", model=None, timeout=EVAL_LAYER_TIMEOUT_SECONDS):
     scratch = tempfile.mkdtemp(prefix="lb_eval_state_")
     env = dict(os.environ)
     env.update({
@@ -148,7 +150,7 @@ def _run_layer(py, repo_dir, layer, task, context="", model=None, timeout=1800):
     return {"report": proc.stderr[-2000:], "approved": False, "completed": False}
 
 
-def make_callables(workspaces, model=None, timeout=1800):
+def make_callables(workspaces, model=None, timeout=EVAL_LAYER_TIMEOUT_SECONDS):
     from langbridge_cli.training.evals.agents_adapter import _parse_worklog
 
     def _agent(spec, layer):

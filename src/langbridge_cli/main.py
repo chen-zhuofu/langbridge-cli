@@ -11,7 +11,7 @@ if __package__ in (None, ""):
 from langbridge_cli.agents import control
 from langbridge_cli.agents.agent import run_pm_loop
 from langbridge_cli.agents.roles import SYSTEM_PROMPT
-from langbridge_cli.config import (
+from langbridge_cli.settings import (
     COMPACT_WHEN_TOKENS_OVER,
     CONFIG_DIR,
     DEFAULT_MODEL,

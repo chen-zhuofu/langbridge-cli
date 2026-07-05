@@ -8,7 +8,7 @@ if str(REPO_SRC) not in sys.path:
     sys.path.insert(0, str(REPO_SRC))
 
 from langbridge_cli.agent import run_l5_component
-from langbridge_cli.config import DEFAULT_MODEL, load_api_key
+from langbridge_cli.settings import DEFAULT_MODEL, load_api_key
 from langbridge_cli.session import create_run_log_path
 
 

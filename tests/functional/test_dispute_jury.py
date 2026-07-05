@@ -63,7 +63,7 @@ def test_push_back_fails_when_jury_not_unanimous(monkeypatch):
 
 
 def test_worklog_records_push_back_and_jury(tmp_path, monkeypatch):
-    monkeypatch.setattr("langbridge_cli.config.L4_WORKLOG_DIR", tmp_path)
+    monkeypatch.setattr("langbridge_cli.settings.L4_WORKLOG_DIR", tmp_path)
     verdicts = iter([NEEDS_WORK, NEEDS_WORK, PASS, PASS])
 
     def fake_l3(api_key, model, task, context, **kwargs):
