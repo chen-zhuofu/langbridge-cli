@@ -100,6 +100,55 @@ def test_in_progress_skips_l3_review(monkeypatch):
     assert l3_calls == []
 
 
+def test_l4_commits_on_l3_pass(monkeypatch):
+    commits = []
+
+    def fake_l3(api_key, model, task, context, **kwargs):
+        return PASS
+
+    def fake_l4(api_key, model, task, context, feedback="", **kwargs):
+        return READY
+
+    monkeypatch.setattr("langbridge_cli.agents.multi_agent.run_l3_test_engineer", fake_l3)
+    monkeypatch.setattr("langbridge_cli.agents.multi_agent.run_l4_engineer", fake_l4)
+    monkeypatch.setattr(
+        "langbridge_cli.agents.workspace_git.commit_task",
+        lambda label, task: commits.append((label, task)) or "abc123",
+    )
+    monkeypatch.setattr("langbridge_cli.agents.workspace_git.snapshot_head", lambda: "before")
+    monkeypatch.setattr("langbridge_cli.agents.workspace_git.revert_snapshot", lambda commit: False)
+
+    output = run_l4_component("key", "model", {"task": "build feature", "context": "repo"})
+
+    assert "PM_REVIEW_STATUS: OK" in output
+    assert commits == [("L4", "build feature")]
+
+
+def test_l4_reverts_on_review_failure(monkeypatch):
+    reverts = []
+
+    def fake_l3(api_key, model, task, context, **kwargs):
+        return NEEDS_WORK
+
+    def fake_l4(api_key, model, task, context, feedback="", **kwargs):
+        return READY
+
+    monkeypatch.setattr("langbridge_cli.agents.multi_agent.run_l3_test_engineer", fake_l3)
+    monkeypatch.setattr("langbridge_cli.agents.multi_agent.run_l4_engineer", fake_l4)
+    monkeypatch.setattr("langbridge_cli.agents.agent.MAX_L4_L3_TURNS", 1)
+    monkeypatch.setattr("langbridge_cli.agents.workspace_git.snapshot_head", lambda: "before")
+    monkeypatch.setattr(
+        "langbridge_cli.agents.workspace_git.revert_snapshot",
+        lambda commit: reverts.append(commit) or True,
+    )
+    monkeypatch.setattr("langbridge_cli.agents.workspace_git.commit_task", lambda *args: None)
+
+    output = run_l4_component("key", "model", {"task": "build feature", "context": "repo"})
+
+    assert "PM_REVIEW_STATUS: NEEDS_WORK" in output
+    assert reverts == ["before"]
+
+
 def test_worklog_records_negotiation(tmp_path, monkeypatch):
     monkeypatch.setattr("langbridge_cli.settings.L4_WORKLOG_DIR", tmp_path)
 

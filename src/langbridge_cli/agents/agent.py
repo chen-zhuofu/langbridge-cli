@@ -220,7 +220,8 @@ def run_l4_component(api_key, model, arguments, trace_sink=None, run_log_path=No
     """One living L4 builds the task; one living L3 reviews it across rounds.
 
     L3 NEEDS_WORK sends feedback back to the same L4; the loop repeats until L3
-    passes, or a turn/time limit is reached.
+    passes, or a turn/time limit is reached. A passing task is committed in git;
+    a failed attempt reverts workspace changes to the pre-task snapshot.
     """
     from langbridge_cli.agents.multi_agent import (
         l3_review_passed,
@@ -230,6 +231,7 @@ def run_l4_component(api_key, model, arguments, trace_sink=None, run_log_path=No
         run_l3_test_engineer,
         run_l4_engineer,
     )
+    from langbridge_cli.agents import workspace_git
 
     task = arguments.get("task", "")
     context = arguments.get("context", "")
@@ -240,6 +242,7 @@ def run_l4_component(api_key, model, arguments, trace_sink=None, run_log_path=No
     if not l4_ready_for_review(l4_report):
         return l4_report
 
+    snapshot = workspace_git.snapshot_head()
     start_worklog(run_log_path, task)
     append_worklog_entry(run_log_path, "L4 engineer", l4_report, "ready")
 
@@ -252,15 +255,18 @@ def run_l4_component(api_key, model, arguments, trace_sink=None, run_log_path=No
         l3_report = run_l3_test_engineer(api_key, model, task, pm_l3_review_context(context, l4_report), session=l3)
         if l3_review_passed(l3_report):
             append_worklog_entry(run_log_path, "L3 test engineer", l3_report, "pass")
+            workspace_git.commit_task("L4", task)
             return pm_review_result(l4_report, l3_report, "OK")
         append_worklog_entry(run_log_path, "L3 test engineer", l3_report, "concern exist")
 
         l4_report = run_l4_engineer(api_key, model, task, context, l3_report, session=l4)
         if not l4_ready_for_review(l4_report):
             append_worklog_entry(run_log_path, "L4 engineer", l4_report, "needs pm")
+            workspace_git.revert_snapshot(snapshot)
             return pm_review_result(l4_report, l3_report, "NEEDS_WORK")
         append_worklog_entry(run_log_path, "L4 engineer", l4_report, "ready")
 
+    workspace_git.revert_snapshot(snapshot)
     return pm_review_result(l4_report, l3_report, "NEEDS_WORK")
 
 
