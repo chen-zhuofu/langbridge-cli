@@ -416,6 +416,11 @@ class LangBridgeTui(App):
         except control.StopRequested:
             self.call_from_thread(self.finish_stopped)
             return
+        except Exception as error:
+            from langbridge_code.llm.client import format_api_error
+
+            self.call_from_thread(self.finish_turn_error, format_api_error(error))
+            return
         write_session_summary(self.api_key, self.model, self.run_log_path)
         self.call_from_thread(self.finish_turn, reply or "")
 
@@ -568,6 +573,12 @@ class LangBridgeTui(App):
         if self.turn_snapshot is not None:
             self.messages = self.turn_snapshot
         self.write_system("\u25a0 Stopped.", style=RED)
+        self.reset_after_turn()
+
+    def finish_turn_error(self, message):
+        if self.turn_snapshot is not None:
+            self.messages = self.turn_snapshot
+        self.write_system(f"\u25a0 {message}", style=RED)
         self.reset_after_turn()
 
     def reset_after_turn(self):

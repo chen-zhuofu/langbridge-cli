@@ -1,6 +1,18 @@
 import json
 
-from langbridge_code.llm.client import from_chat_message, to_chat_messages, to_chat_tools
+import pytest
+from openai import RateLimitError
+
+from langbridge_code.llm.client import (
+    ApiQuotaExceeded,
+    create_model_response,
+    format_api_error,
+    from_chat_message,
+    quota_exceeded_message,
+    rate_limit_is_non_retryable,
+    to_chat_messages,
+    to_chat_tools,
+)
 
 
 class _Fn:
@@ -70,3 +82,47 @@ def test_to_chat_tools_wraps_function_schema():
 
     assert tools[0]["type"] == "function"
     assert tools[0]["function"]["name"] == "read_file"
+
+
+def _rate_limit_error(message: str) -> RateLimitError:
+    error = RateLimitError.__new__(RateLimitError)
+    Exception.__init__(error, message)
+    return error
+
+
+def test_rate_limit_is_non_retryable_for_tpd():
+    error = _rate_limit_error(
+        "organization TPD rate limit, current: 1500012, limit: 1500000"
+    )
+    assert rate_limit_is_non_retryable(error) is True
+
+
+def test_rate_limit_is_retryable_for_rpm():
+    error = _rate_limit_error("Too many requests per minute")
+    assert rate_limit_is_non_retryable(error) is False
+
+
+def test_create_model_response_fails_fast_on_tpd(monkeypatch):
+    error = _rate_limit_error("organization TPD rate limit")
+    client = type("Client", (), {})()
+    client.chat = type("Chat", (), {})()
+    client.chat.completions = type("Completions", (), {})()
+    client.chat.completions.create = lambda **_kwargs: (_ for _ in ()).throw(error)
+    client.responses = None
+
+    monkeypatch.setattr("langbridge_code.llm.client.make_client", lambda _key: client)
+    monkeypatch.setattr("langbridge_code.llm.client.uses_responses_api", lambda: False)
+    sleeps = []
+    monkeypatch.setattr("langbridge_code.llm.client.time.sleep", lambda s: sleeps.append(s))
+
+    with pytest.raises(ApiQuotaExceeded, match="daily token quota"):
+        create_model_response("key", "kimi-k2.7-code", [{"role": "user", "content": "hi"}])
+
+    assert sleeps == []
+
+
+def test_format_api_error_for_quota():
+    message = format_api_error(
+        ApiQuotaExceeded(quota_exceeded_message(_rate_limit_error("TPD")))
+    )
+    assert "daily token quota" in message.lower()

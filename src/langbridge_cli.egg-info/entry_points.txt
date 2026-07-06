@@ -1,2 +1,0 @@
-[console_scripts]
-langbridge = langbridge_cli.main:main

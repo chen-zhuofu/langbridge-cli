@@ -6,6 +6,40 @@ import uuid
 from openai import OpenAI, OpenAIError, RateLimitError
 
 from langbridge_code.llm.debug import print_llm_request, print_llm_response
+
+
+class ApiQuotaExceeded(RuntimeError):
+    """Non-retryable provider quota limit (e.g. Moonshot organization TPD)."""
+
+
+def rate_limit_is_non_retryable(error: RateLimitError) -> bool:
+    """Return True when backing off will not help until quota resets."""
+    text = str(error).lower()
+    return (
+        "tpd" in text
+        or "tokens per day" in text
+        or "rate_limit_reached_error" in text and "daily" in text
+    )
+
+
+def quota_exceeded_message(error: RateLimitError) -> str:
+    return (
+        "API daily token quota is exhausted (provider TPD limit). "
+        "Wait for the daily reset, or switch provider/model/API key in ~/.langbridge/config.json."
+    )
+
+
+def format_api_error(error: BaseException) -> str:
+    if isinstance(error, ApiQuotaExceeded):
+        return str(error)
+    if isinstance(error, RateLimitError) and rate_limit_is_non_retryable(error):
+        return quota_exceeded_message(error)
+    text = str(error).strip()
+    if "429" in text and "tpd" in text.lower():
+        return quota_exceeded_message(RateLimitError(text))
+    if len(text) > 400:
+        return f"Request failed: {text[:400]}…"
+    return f"Request failed: {text}"
 from langbridge_code.llm.parse import extract_output_text
 from langbridge_code.settings import API_BASE_URL, API_PROVIDER, load_config
 
@@ -154,8 +188,12 @@ def create_model_response(
             print_llm_response(label, data)
             return data
         except RateLimitError as error:
+            if rate_limit_is_non_retryable(error):
+                raise ApiQuotaExceeded(quota_exceeded_message(error)) from error
             last_error = error
             time.sleep(min(2 ** attempt, 30))
         except OpenAIError as error:
             raise RuntimeError(str(error)) from error
+    if isinstance(last_error, RateLimitError) and rate_limit_is_non_retryable(last_error):
+        raise ApiQuotaExceeded(quota_exceeded_message(last_error)) from last_error
     raise RuntimeError(str(last_error)) from last_error
