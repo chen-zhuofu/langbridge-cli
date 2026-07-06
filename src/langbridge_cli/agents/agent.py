@@ -38,6 +38,11 @@ from langbridge_cli.persistence.agent_worklog import (
 from langbridge_cli.persistence.worklog import append_worklog_entry, start_worklog
 from langbridge_cli.agents.limits import now, over_context_budget, over_time_budget
 from langbridge_cli.agents import control
+from langbridge_cli.persistence.context import (
+    RecentFileStore,
+    compact_messages_if_needed,
+    record_tool_read,
+)
 
 
 def run_pm_loop(
@@ -147,6 +152,7 @@ def run_agent(
     received = next((message.get("content", "") for message in reversed(input) if message.get("role") == "user"), "")
     write_worklog_received(run_log_path, "PM agent", worklog_id, turn_id, str(received))
     start_time = now()
+    file_store = RecentFileStore()
     for step in range(MAX_AGENT_STEPS):
         control.checkpoint()
         if over_time_budget(start_time, MAX_AGENT_SECONDS):
@@ -163,9 +169,11 @@ def run_agent(
             write_worklog_step(run_log_path, "PM agent", worklog_id, turn_id, step, step_response)
             for call in tool_calls:
                 tool_output = run_tool_call(call, api_key, model, trace_sink, approval_callback, run_log_path, turn_id)
+                record_tool_read(file_store, call.get("name"), call.get("arguments"), tool_output.get("output", ""))
                 input.append(tool_output)
                 write_tool_calls_result_log(run_log_path, turn_id, step, tool_output) # write tool_output or socalled "observation" into log
                 write_worklog_observation(run_log_path, "PM agent", worklog_id, turn_id, step, tool_output)
+            compact_messages_if_needed(input, max_context_tokens=MAX_AGENT_CONTEXT_TOKENS, file_store=file_store, api_key=api_key, model=model, label="PM compaction")
         else:
             return finish_pm(input, extract_output_text(step_response), run_log_path, turn_id, print_reply, worklog_id)
     return finish_pm(input, "Agent stopped because it reached the maximum tool-call steps.", run_log_path, turn_id, print_reply, worklog_id)

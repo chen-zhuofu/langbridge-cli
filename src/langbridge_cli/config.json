@@ -29,7 +29,12 @@
     "compact_when_tokens_over": 60000,
     "recent_context_tokens": 40000,
     "summary_target_chars": 8000,
-    "stale_tool_output_chars": 500
+    "stale_tool_output_chars": 500,
+    "compact_tool_steps_keep": 2,
+    "compact_recent_files_keep": 5,
+    "compact_loop_fraction": 0.5,
+    "compact_use_llm": true,
+    "compact_llm_input_chars": 24000
   },
   "tools": {
     "filesystem": {

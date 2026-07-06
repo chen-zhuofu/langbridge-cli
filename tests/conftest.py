@@ -3,7 +3,7 @@ import pytest
 
 @pytest.fixture(autouse=True)
 def bypass_tdd_harness(monkeypatch, request):
-    if request.node.fspath.basename == "test_tdd_harness.py":
+    if request.node.fspath.basename in {"test_tdd_harness.py", "test_compaction.py", "test_session.py"}:
         return
 
     def fake(
