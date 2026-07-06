@@ -1,8 +1,9 @@
 """LLM client — OpenAI Responses API or Moonshot/Kimi chat completions."""
 import json
+import time
 import uuid
 
-from openai import OpenAI, OpenAIError
+from openai import OpenAI, OpenAIError, RateLimitError
 
 from langbridge_cli.llm.debug import print_llm_request, print_llm_response
 from langbridge_cli.llm.parse import extract_output_text
@@ -129,27 +130,32 @@ def create_model_response(
 ):
     print_llm_request(label, model, agent_input, tool_schemas)
     client = make_client(api_key)
-    try:
-        if uses_responses_api():
-            kwargs = {"model": model, "input": agent_input}
-            if tool_schemas:
-                kwargs["tools"] = tool_schemas
-            if reasoning is not None:
-                kwargs["reasoning"] = reasoning
-            response = client.responses.create(**kwargs)
-            data = response.model_dump(exclude_none=True)
-        else:
-            kwargs = {
-                "model": model,
-                "messages": to_chat_messages(agent_input),
-            }
-            if tool_schemas:
-                kwargs["tools"] = to_chat_tools(tool_schemas)
-            response = client.chat.completions.create(**kwargs)
-            message = response.choices[0].message
-            data = {"output": from_chat_message(message)}
-    except OpenAIError as error:
-        raise RuntimeError(str(error)) from error
-
-    print_llm_response(label, data)
-    return data
+    last_error = None
+    for attempt in range(8):
+        try:
+            if uses_responses_api():
+                kwargs = {"model": model, "input": agent_input}
+                if tool_schemas:
+                    kwargs["tools"] = tool_schemas
+                if reasoning is not None:
+                    kwargs["reasoning"] = reasoning
+                response = client.responses.create(**kwargs)
+                data = response.model_dump(exclude_none=True)
+            else:
+                kwargs = {
+                    "model": model,
+                    "messages": to_chat_messages(agent_input),
+                }
+                if tool_schemas:
+                    kwargs["tools"] = to_chat_tools(tool_schemas)
+                response = client.chat.completions.create(**kwargs)
+                message = response.choices[0].message
+                data = {"output": from_chat_message(message)}
+            print_llm_response(label, data)
+            return data
+        except RateLimitError as error:
+            last_error = error
+            time.sleep(min(2 ** attempt, 30))
+        except OpenAIError as error:
+            raise RuntimeError(str(error)) from error
+    raise RuntimeError(str(last_error)) from last_error

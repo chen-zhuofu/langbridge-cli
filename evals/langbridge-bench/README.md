@@ -69,7 +69,39 @@ not scanned).
 
 Full manifest: `excluded.json`.
 
-### Parallel Docker eval (recommended for throughput)
+### Kimi Code CLI eval (external agent)
+
+Run the same **27 tasks** with the neighboring [Kimi Code CLI](https://github.com/MoonshotAI/kimi-code)
+(`../kimi-code`) instead of langbridge-cli's built-in PM/L4 agents:
+
+```bash
+# once: install kimi (Node 18+)
+curl -fsSL https://code.kimi.com/kimi-code/install.sh | bash
+
+# credentials (pick one):
+# 1) OAuth (recommended for Kimi Code agent loop): kimi login
+# 2) Moonshot API key from ~/.langbridge — the runner auto-writes
+#    ~/.kimi-code/config.toml on start (no manual /login needed for config)
+
+# smoke (1 task, goal mode, serial)
+uv run python evals/langbridge-bench/run_eval_kimi_code.py --limit 1
+
+# full bench (default: --mode goal --workers 1, timeout 3600s/task)
+uv run python evals/langbridge-bench/run_eval_kimi_code.py
+```
+
+The runner reads your Moonshot key from `~/.langbridge/config.json`, writes
+`~/.kimi-code/config.toml`, and invokes `kimi -p "/goal …"` per task. Use
+`--model kimi-k2.7-code` to override the default model id. If `kimi` hangs on
+the first LLM turn with an API-key provider, run `kimi login` once (OAuth) and
+retry.
+
+Options: `--mode {goal,prompt}`, `--model` (kimi `-m` alias), `--kimi-bin`, `--workers`,
+`--timeout`, `--limit`. Results: `out/kimi_code_run_summary.json`,
+`out/kimi_code_artifacts/<task_id>/`, and `training/results/l4/` (dataset
+`langbridge-bench-kimi-code`).
+
+### Parallel Docker eval (langbridge agents)
 
 The host `training.cli eval` runner is **serial**. For parallel, isolated runs
 (one container per task, repo venv + pytest inside):

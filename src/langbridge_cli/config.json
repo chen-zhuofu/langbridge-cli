@@ -64,7 +64,7 @@
     "default_epochs": 1,
     "default_batch_size": 2,
     "default_checkpoint_every": "batch",
-    "eval_layer_timeout_seconds": 1800,
+    "eval_layer_timeout_seconds": 3600,
     "grade_timeout_seconds": 600
   },
   "paths": {
