@@ -27,7 +27,7 @@ from langbridge_cli.persistence.logging import (
 )
 from langbridge_cli.llm.parse import extract_output_text, print_step_trace
 from langbridge_cli.llm.tool_schema import strip_tool_purpose
-from langbridge_cli.tools.registry import main_tool_schemas, main_tools
+from langbridge_cli.tools import MAIN_TOOL_SCHEMAS, MAIN_TOOLS
 from langbridge_cli.persistence.agent_worklog import (
     new_worklog_id,
     write_worklog_finish,
@@ -185,7 +185,7 @@ def create_response(api_key, model, agent_input):
         api_key,
         model,
         agent_input,
-        tool_schemas=main_tool_schemas(model=model),
+        tool_schemas=MAIN_TOOL_SCHEMAS,
         reasoning={"summary": "auto"},
         label="PM agent",
     )
@@ -197,8 +197,7 @@ def run_tool_call(call, api_key=None, model=None, trace_sink=None, approval_call
 
     try:
         arguments = strip_tool_purpose(json.loads(call.get("arguments") or "{}"))
-        available_tools = main_tools(model=model)
-        if name not in available_tools:
+        if name not in MAIN_TOOLS:
             raise ValueError(f"Unknown tool: {name}")
         if name in WRITE_TOOLS and not approve_write_tool(name, arguments, approval_callback):
             raise PermissionError(f"{name} was not approved")
@@ -209,8 +208,8 @@ def run_tool_call(call, api_key=None, model=None, trace_sink=None, approval_call
             # The registered tool is just a placeholder; the L5 component loop runs here.
             output = run_l5_component(api_key, model, arguments, trace_sink, run_log_path, turn_id, approval_callback)
         else:
-            tool_arguments = add_hidden_tool_context(available_tools[name], arguments, api_key, model, trace_sink, approval_callback, run_log_path, turn_id)
-            output = available_tools[name](**tool_arguments)
+            tool_arguments = add_hidden_tool_context(MAIN_TOOLS[name], arguments, api_key, model, trace_sink, approval_callback, run_log_path, turn_id)
+            output = MAIN_TOOLS[name](**tool_arguments)
     except Exception as error:
         output = f"Tool error: {error}"
 

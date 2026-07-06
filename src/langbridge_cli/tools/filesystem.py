@@ -1,9 +1,15 @@
 import json
+import shutil
+import subprocess
 from pathlib import Path
 
 from langbridge_cli.settings import MAX_FILE_BYTES
 
 WORKSPACE_ROOT = Path.cwd().resolve()
+DEFAULT_GLOB_LIMIT = 100
+DEFAULT_GREP_LIMIT = 250
+RG_TIMEOUT_SECONDS = 60
+
 TOOL_SCHEMAS = [
     {
         "type": "function",
@@ -24,6 +30,35 @@ TOOL_SCHEMAS = [
     },
     {
         "type": "function",
+        "name": "glob",
+        "description": (
+            "Find files by glob pattern under the workspace (powered by ripgrep). "
+            "Respects .gitignore. Example patterns: '*.py', '**/*.ts', 'src/**/*.md'."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "pattern": {
+                    "type": "string",
+                    "description": "Glob pattern to match file paths.",
+                },
+                "path": {
+                    "type": "string",
+                    "description": "Directory to search relative to the workspace.",
+                    "default": ".",
+                },
+                "max_results": {
+                    "type": "integer",
+                    "description": "Maximum number of matching paths to return.",
+                    "default": DEFAULT_GLOB_LIMIT,
+                },
+            },
+            "required": ["pattern"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "type": "function",
         "name": "read_file",
         "description": "Read a text file under the current workspace.",
         "parameters": {
@@ -35,6 +70,50 @@ TOOL_SCHEMAS = [
                 }
             },
             "required": ["path"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "type": "function",
+        "name": "grep",
+        "description": (
+            "Search file contents with ripgrep (regex). Respects .gitignore. "
+            "Use output_mode 'content' for matching lines or 'files_with_matches' for paths only."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "pattern": {
+                    "type": "string",
+                    "description": "Regular expression to search for.",
+                },
+                "path": {
+                    "type": "string",
+                    "description": "File or directory path relative to the workspace.",
+                    "default": ".",
+                },
+                "glob_pattern": {
+                    "type": "string",
+                    "description": "Optional glob to filter which files are searched (e.g. '*.py').",
+                },
+                "output_mode": {
+                    "type": "string",
+                    "enum": ["content", "files_with_matches"],
+                    "description": "Return matching lines or only file paths.",
+                    "default": "content",
+                },
+                "head_limit": {
+                    "type": "integer",
+                    "description": "Maximum number of lines or files to return.",
+                    "default": DEFAULT_GREP_LIMIT,
+                },
+                "ignore_case": {
+                    "type": "boolean",
+                    "description": "Case-insensitive search.",
+                    "default": False,
+                },
+            },
+            "required": ["pattern"],
             "additionalProperties": False,
         },
     },
@@ -120,6 +199,34 @@ def resolve_workspace_path(path):
     return target
 
 
+def _rg_binary():
+    rg = shutil.which("rg")
+    if not rg:
+        raise RuntimeError(
+            "ripgrep (rg) is required for grep/glob tools but was not found on PATH. "
+            "Install ripgrep or use execute_program."
+        )
+    return rg
+
+
+def _run_rg(args):
+    result = subprocess.run(
+        args,
+        capture_output=True,
+        text=True,
+        timeout=RG_TIMEOUT_SECONDS,
+    )
+    if result.returncode not in (0, 1):
+        detail = (result.stderr or result.stdout or "rg failed").strip()
+        raise RuntimeError(detail)
+    return result.stdout
+
+
+def _relative_workspace_path(path):
+    resolved = Path(path).resolve()
+    return str(resolved.relative_to(WORKSPACE_ROOT))
+
+
 @tool("list_dir")
 def list_dir(path="."):
     target = resolve_workspace_path(path)
@@ -134,6 +241,43 @@ def list_dir(path="."):
         entries.append({"name": child.name, "type": kind})
 
     return json.dumps({"path": str(target.relative_to(WORKSPACE_ROOT)), "entries": entries}, indent=2)
+
+
+@tool("glob")
+def glob(pattern, path=".", max_results=DEFAULT_GLOB_LIMIT):
+    if not pattern:
+        raise ValueError("pattern must not be empty")
+
+    target = resolve_workspace_path(path)
+    if not target.exists():
+        raise FileNotFoundError(f"No such path: {path}")
+
+    max_results = max(1, min(int(max_results), 500))
+    stdout = _run_rg([_rg_binary(), "--files", "--glob", pattern, str(target)])
+
+    ranked = []
+    for line in stdout.splitlines():
+        if not line.strip():
+            continue
+        file_path = Path(line.strip()).resolve()
+        try:
+            rel = str(file_path.relative_to(WORKSPACE_ROOT))
+        except ValueError:
+            continue
+        ranked.append((file_path.stat().st_mtime, rel))
+
+    ranked.sort(key=lambda item: item[0], reverse=True)
+    matches = [rel for _, rel in ranked[:max_results]]
+    return json.dumps(
+        {
+            "pattern": pattern,
+            "path": path,
+            "matches": matches,
+            "truncated": len(ranked) > max_results,
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
 
 
 @tool("read_file")
@@ -156,6 +300,62 @@ def read_file(path):
     if truncated:
         text += f"\n\n[truncated after {MAX_FILE_BYTES} bytes]"
     return text
+
+
+@tool("grep")
+def grep(pattern, path=".", glob_pattern=None, output_mode="content", head_limit=DEFAULT_GREP_LIMIT, ignore_case=False):
+    if not pattern:
+        raise ValueError("pattern must not be empty")
+    if output_mode not in {"content", "files_with_matches"}:
+        raise ValueError("output_mode must be 'content' or 'files_with_matches'")
+
+    target = resolve_workspace_path(path)
+    if not target.exists():
+        raise FileNotFoundError(f"No such path: {path}")
+
+    head_limit = max(1, min(int(head_limit), 1000))
+    args = [_rg_binary(), "--color=never", "--max-count", str(head_limit)]
+    if ignore_case:
+        args.append("-i")
+    if glob_pattern:
+        args.extend(["--glob", glob_pattern])
+    if output_mode == "files_with_matches":
+        args.append("-l")
+    else:
+        args.append("-n")
+    args.extend([pattern, str(target)])
+
+    stdout = _run_rg(args)
+    if output_mode == "files_with_matches":
+        matches = []
+        for line in stdout.splitlines():
+            if not line.strip():
+                continue
+            try:
+                matches.append(_relative_workspace_path(line.strip()))
+            except ValueError:
+                continue
+        payload = {"pattern": pattern, "path": path, "files": matches[:head_limit]}
+    else:
+        lines = []
+        for line in stdout.splitlines():
+            if not line.strip():
+                continue
+            parts = line.split(":", 2)
+            if len(parts) < 3:
+                continue
+            file_path, line_number, text = parts
+            try:
+                rel = _relative_workspace_path(file_path)
+            except ValueError:
+                continue
+            lines.append({"path": rel, "line": int(line_number), "text": text})
+            if len(lines) >= head_limit:
+                break
+        payload = {"pattern": pattern, "path": path, "matches": lines}
+
+    payload["truncated"] = len(stdout.splitlines()) >= head_limit
+    return json.dumps(payload, ensure_ascii=False, indent=2)
 
 
 @tool("edit_file")

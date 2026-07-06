@@ -151,7 +151,7 @@ Langbridge is an engineered, multi-agent:
 The PM works read-only on the workspace and delegates all writes to specialists.
 PM tools:
 
-- `list_dir`, `glob_file_search`/`Glob`, `read_file`, `grep_files`/`Grep`: inspect the workspace (search tools use ripgrep; schema follows OpenAI Codex or Kimi Code CLI depending on provider/model)
+- `list_dir`, `glob`, `read_file`, `grep`: inspect the workspace (glob/grep use ripgrep)
 - `execute_program`: run a non-interactive program (e.g. bring the app up)
 - `read_webpage`: fetch the text of a URL (docs, an issue, reference material)
 - `update_plan`: write or update the `todo_list`
