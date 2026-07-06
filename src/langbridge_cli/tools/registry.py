@@ -80,10 +80,12 @@ def main_tool_schemas(*, provider=None, model=None, profile=None):
     _, _, _, _, _, _, base_schemas = _load_base()
     profile = profile or detect_tool_profile(provider=provider, model=model)
     search_names = [schema["name"] for schema in search_tool_schemas(profile=profile)]
+    glob_name, grep_name = search_names
     names = [
         "list_dir",
-        *search_names,
+        glob_name,
         "read_file",
+        grep_name,
         "execute_program",
         "read_webpage",
         "ask_l4_engineer",

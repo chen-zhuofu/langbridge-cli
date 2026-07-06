@@ -5,7 +5,8 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from langbridge_cli.tools.filesystem import WORKSPACE_ROOT, resolve_workspace_path
+from langbridge_cli.tools import filesystem
+from langbridge_cli.tools.filesystem import resolve_workspace_path
 
 DEFAULT_GLOB_LIMIT = 100
 DEFAULT_GREP_LIMIT = 250
@@ -47,7 +48,7 @@ def _run_rg(args):
 
 def _relative_workspace_path(path):
     resolved = Path(path).resolve()
-    return str(resolved.relative_to(WORKSPACE_ROOT))
+    return str(resolved.relative_to(filesystem.WORKSPACE_ROOT))
 
 
 def _glob_impl(pattern, path=".", limit=DEFAULT_GLOB_LIMIT, include_ignored=False):
@@ -71,7 +72,7 @@ def _glob_impl(pattern, path=".", limit=DEFAULT_GLOB_LIMIT, include_ignored=Fals
             continue
         file_path = Path(line.strip()).resolve()
         try:
-            rel = str(file_path.relative_to(WORKSPACE_ROOT))
+            rel = str(file_path.relative_to(filesystem.WORKSPACE_ROOT))
         except ValueError:
             continue
         ranked.append((file_path.stat().st_mtime, rel))
