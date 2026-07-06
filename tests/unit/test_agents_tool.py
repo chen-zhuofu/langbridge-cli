@@ -1,7 +1,8 @@
 import langbridge_cli.agents.agent as agent_module
+from langbridge_cli.tools import registry as tools_registry
 from langbridge_cli.agents.agent import add_hidden_tool_context, run_l4_component, run_tool_call
-from langbridge_cli.agents.multi_agent import L4_TOOL_SCHEMAS, max_steps_report, run_specialist_agent, run_specialist_tool_call
-from langbridge_cli.tools import MAIN_TOOL_SCHEMAS, MAIN_TOOLS, TOOL_SCHEMAS, TOOLS
+from langbridge_cli.agents.multi_agent import max_steps_report, run_specialist_agent, run_specialist_tool_call
+from langbridge_cli.tools import MAIN_TOOL_SCHEMAS, MAIN_TOOLS, TOOL_SCHEMAS, TOOLS, l4_tool_schemas, main_tool_schemas, main_tools
 from langbridge_cli.agents.multi_agent import l3_review_passed
 from langbridge_cli.tools.agents import ask_l3_test_engineer, ask_l4_engineer
 
@@ -11,20 +12,31 @@ def test_l3_test_engineer_tool_is_registered():
     assert any(schema["name"] == "ask_l3_test_engineer" for schema in TOOL_SCHEMAS)
     assert "ask_l4_engineer" in TOOLS
     assert any(schema["name"] == "ask_l4_engineer" for schema in TOOL_SCHEMAS)
-    assert any(schema["name"] == "delete_file" for schema in L4_TOOL_SCHEMAS)
-    assert set(MAIN_TOOLS) == {"list_dir", "glob", "read_file", "grep", "execute_program", "read_webpage", "ask_l4_engineer", "ask_l5_engineer", "update_plan"}
-    assert [schema["name"] for schema in MAIN_TOOL_SCHEMAS] == [
+    assert any(schema["name"] == "delete_file" for schema in l4_tool_schemas(profile="openai"))
+    openai_main = main_tool_schemas(profile="openai")
+    assert set(main_tools(profile="openai")) == {
         "list_dir",
-        "glob",
+        "glob_file_search",
         "read_file",
-        "grep",
+        "grep_files",
+        "execute_program",
+        "read_webpage",
+        "ask_l4_engineer",
+        "ask_l5_engineer",
+        "update_plan",
+    }
+    assert [schema["name"] for schema in openai_main] == [
+        "list_dir",
+        "glob_file_search",
+        "read_file",
+        "grep_files",
         "execute_program",
         "read_webpage",
         "ask_l4_engineer",
         "ask_l5_engineer",
         "update_plan",
     ]
-    for schema in MAIN_TOOL_SCHEMAS + L4_TOOL_SCHEMAS:
+    for schema in openai_main + l4_tool_schemas(profile="openai"):
         assert "purpose" in schema["parameters"]["properties"]
         assert "purpose" in schema["parameters"]["required"]
 
@@ -58,7 +70,9 @@ def test_hidden_tool_context_is_passed_only_when_supported():
 
 
 def test_pm_tool_strips_purpose_before_execution(monkeypatch):
-    monkeypatch.setitem(agent_module.MAIN_TOOLS, "read_file", lambda **arguments: sorted(arguments))
+    tools = main_tools(model="gpt-4.1")
+    tools["read_file"] = lambda **arguments: sorted(arguments)
+    monkeypatch.setattr(tools_registry, "main_tools", lambda **kwargs: tools)
 
     result = run_tool_call(
         {
@@ -66,7 +80,8 @@ def test_pm_tool_strips_purpose_before_execution(monkeypatch):
             "name": "read_file",
             "call_id": "call_1",
             "arguments": '{"purpose":"Inspect the target file.","path":"README.md"}',
-        }
+        },
+        model="gpt-4.1",
     )
 
     assert result == {

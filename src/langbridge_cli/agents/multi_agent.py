@@ -11,8 +11,8 @@ from langbridge_cli.llm.parse import extract_output_text, print_step_trace
 from langbridge_cli.agents.roles import L3_TEST_ENGINEER_PROMPT, L4_ENGINEER_PROMPT, L5_ENGINEER_PROMPT
 from langbridge_cli.skills import skill_catalog_text
 from langbridge_cli import policy
-from langbridge_cli.llm.tool_schema import strip_tool_purpose, with_tool_purpose
-from langbridge_cli.tools import execution, filesystem, skills, testing
+from langbridge_cli.llm.tool_schema import strip_tool_purpose
+from langbridge_cli.tools.registry import l3_tool_schemas, l3_tools, l4_tool_schemas, l4_tools
 from langbridge_cli.persistence.agent_worklog import (
     new_worklog_id,
     write_worklog_finish,
@@ -24,46 +24,10 @@ from langbridge_cli.agents.limits import now, over_context_budget, over_time_bud
 from langbridge_cli.agents import control
 
 
-L3_TOOL_NAMES = {"list_dir", "glob", "read_file", "grep", "run_tests"}
-L3_TOOL_SCHEMAS = with_tool_purpose(
-    [
-        schema
-        for schema in filesystem.TOOL_SCHEMAS + testing.TOOL_SCHEMAS
-        if schema["name"] in L3_TOOL_NAMES
-    ]
-)
-L3_TOOLS = {name: tool for name, tool in (filesystem.TOOLS | testing.TOOLS).items() if name in L3_TOOL_NAMES}
-
-L4_TOOL_NAMES = {
-    "list_dir",
-    "glob",
-    "read_file",
-    "grep",
-    "edit_file",
-    "create_file",
-    "delete_file",
-    "run_tests",
-    "execute_program",
-    "read_skill",
-}
-L4_TOOL_SCHEMAS = with_tool_purpose(
-    [
-        schema
-        for schema in filesystem.TOOL_SCHEMAS + testing.TOOL_SCHEMAS + execution.TOOL_SCHEMAS + skills.TOOL_SCHEMAS
-        if schema["name"] in L4_TOOL_NAMES
-    ]
-)
-L4_TOOLS = {
-    name: tool
-    for name, tool in (filesystem.TOOLS | testing.TOOLS | execution.TOOLS | skills.TOOLS).items()
-    if name in L4_TOOL_NAMES
-}
 L4_WRITE_TOOLS = {"create_file", "delete_file", "edit_file"}
 
+
 # L5 codes and tests just like L4, so it shares L4's tool set and write tools.
-L5_TOOL_SCHEMAS = L4_TOOL_SCHEMAS
-L5_TOOLS = L4_TOOLS
-L5_WRITE_TOOLS = L4_WRITE_TOOLS
 
 # The implementers (L4/L5) can pull skills on demand. We list the catalog in their
 # system prompt and give them the read_skill tool to load one when it fits. The
@@ -240,14 +204,14 @@ def run_specialist_agent(api_key, model, system_prompt, user_prompt, tool_schema
 
 def new_l3_session(api_key, model, trace_sink=None, run_log_path=None, turn_id=None):
     return SpecialistSession(
-        api_key, model, l3_system_prompt(), L3_TOOL_SCHEMAS, L3_TOOLS, "L3 test engineer",
+        api_key, model, l3_system_prompt(), l3_tool_schemas(model=model), l3_tools(model=model), "L3 test engineer",
         trace_sink=trace_sink, run_log_path=run_log_path, turn_id=turn_id,
     )
 
 
 def new_l4_session(api_key, model, trace_sink=None, approval_callback=None, run_log_path=None, turn_id=None, write_guard=None):
     return SpecialistSession(
-        api_key, model, l4_system_prompt(), L4_TOOL_SCHEMAS, L4_TOOLS, "L4 engineer",
+        api_key, model, l4_system_prompt(), l4_tool_schemas(model=model), l4_tools(model=model), "L4 engineer",
         trace_sink=trace_sink, approval_callback=approval_callback, run_log_path=run_log_path, turn_id=turn_id,
         write_guard=write_guard,
     )
@@ -255,7 +219,7 @@ def new_l4_session(api_key, model, trace_sink=None, approval_callback=None, run_
 
 def new_l5_session(api_key, model, trace_sink=None, approval_callback=None, run_log_path=None, turn_id=None, write_guard=None):
     return SpecialistSession(
-        api_key, model, l5_system_prompt(), L5_TOOL_SCHEMAS, L5_TOOLS, "L5 engineer",
+        api_key, model, l5_system_prompt(), l4_tool_schemas(model=model), l4_tools(model=model), "L5 engineer",
         trace_sink=trace_sink, approval_callback=approval_callback, run_log_path=run_log_path, turn_id=turn_id,
         write_guard=write_guard,
     )

@@ -1,7 +1,6 @@
 import os
 
 from langbridge_cli.settings import DEFAULT_MODEL, load_api_key
-from langbridge_cli.agents.multi_agent import run_l3_test_engineer
 
 
 TOOL_SCHEMAS = [
@@ -96,6 +95,8 @@ def tool(name):
 
 @tool("ask_l3_test_engineer")
 def ask_l3_test_engineer(task, context="", api_key=None, model=None, trace_sink=None, run_log_path=None, turn_id=None):
+    from langbridge_cli.agents.multi_agent import run_l3_test_engineer
+
     api_key = api_key or load_api_key()
     model = model or os.environ.get("LANGBRIDGE_MODEL", DEFAULT_MODEL)
     if trace_sink is None and run_log_path is None:
