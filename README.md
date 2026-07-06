@@ -1,9 +1,11 @@
-<img src="assets/Langbridge_Logotype_Horizontal.svg" alt="langbridge-cli" width="360">
+# LangBridge Code
 
-A self-evolving, multi-agent coding CLI. **Default backend: Moonshot Kimi**
-(`kimi-k2.7-code`); **also supports OpenAI** (e.g. `gpt-5.1-codex`) via the same
-agent loop. Pick the provider in `~/.langbridge/config.json` or with env vars —
-see [Models & providers](#models--providers) below.
+<img src="assets/Langbridge_Logotype_Horizontal.svg" alt="LangBridge Code" width="360">
+
+A self-evolving coding agent with a **flat workflow** (router → planner → todo →
+coder↔reviewer). **Default backend: Moonshot Kimi** (`kimi-k2.7-code`); **also
+supports OpenAI** (e.g. `gpt-5.1-codex`). Configure in `~/.langbridge-code/config.json`
+(legacy `~/.langbridge/` still works) or via env vars — see [Models & providers](#models--providers).
 
 Langbridge runs a **flat workflow** pipeline: route chat vs task, plan when needed,
 then execute todo items through a Coder↔Reviewer loop (or Presenter for slides).
@@ -13,7 +15,8 @@ conversation gets long.
 Start it:
 
 ```bash
-uv run langbridge 
+uv run langbridge-code
+# legacy alias: uv run langbridge
 ```
 
 ## Evolve (self-play training)
@@ -21,7 +24,7 @@ uv run langbridge
 Langbridge is **self-evolving**: an outer **evolver** improves the team over many
 tasks without editing Python source — by updating a shared **policy** (per-role
 guidance bullets and evolver-written skills) that each agent folds into its
-prompt on the next run. Code lives in `src/langbridge_cli/training/`.
+prompt on the next run. Code lives in `src/langbridge_code/training/`.
 
 Two nested loops:
 
@@ -42,21 +45,21 @@ specs in `evals/langbridge-bench/specs/`):
 
 ```bash
 # L4 implementer only
-uv run python -m langbridge_cli.training.cli eval --role l4 --limit 5
+uv run python -m langbridge_code.training.cli eval --role l4 --limit 5
 
 # L3 reviewer (gold + no-fix cases per task, test-based labels)
-uv run python -m langbridge_cli.training.cli eval --role l3 --limit 5
+uv run python -m langbridge_code.training.cli eval --role l3 --limit 5
 
 # Full L4 ⇄ L3 inner loop (same trace shape train uses today)
-uv run python -m langbridge_cli.training.cli eval --role loop --limit 5
+uv run python -m langbridge_code.training.cli eval --role loop --limit 5
 
 # Evolver epoch (L4/L3 policy only for now)
-uv run python -m langbridge_cli.training.cli train --epochs 1 --batch-size 2
+uv run python -m langbridge_code.training.cli train --epochs 1 --batch-size 2
 ```
 
 For a local git repo + custom specs, set `LANGBRIDGE_TARGET_REPO` and use
 `--source local`. Full design, guards, and env vars:
-`src/langbridge_cli/training/README.md`.
+`src/langbridge_code/training/README.md`.
 
 ## Loop Engineering
 
@@ -130,15 +133,14 @@ PM tools:
 Specialists get the write and test tools. L4 and L5 share `edit_file`,
 `create_file`, `delete_file`, `run_tests`, `bash`, and `read_skill`
 on top of the read-only file tools; L3 gets the read-only file tools plus
-`run_tests`. Both delegations trigger PM-driven L3 review when the work is ready.
+File tools are limited to the directory where you start the CLI. Write tools
+(`create_file`, `edit_file`, `delete_file`, `bash`) ask for approval first.
 
-File tools are limited to the directory where you start the CLI. The write tools
-(`create_file`, `edit_file`, `delete_file`, `bash`) and the
-`ask_l4_engineer` / `ask_l5_engineer` delegations ask for approval first.
-
-On-demand skills: L4 and L5 see a catalog of skills (short playbooks) in their
-prompt and can call `read_skill(name)` to load one before starting. The bundled
-`karpathy` skill captures the team's engineering discipline.
+On-demand skills: specialists see a catalog of playbooks in their prompt and can
+call `read_skill(name)` to load one. Bundled skills include Karpathy guidelines
+and vendored [Superpowers](https://github.com/obra/superpowers) (`test-driven-development`,
+`verification-before-completion`, etc.) under `src/langbridge_code/skills/superpowers/`.
+Re-vendor with `scripts/vendor_superpowers.sh`.
 
 Each tool call includes a required `purpose` field: a short, user-visible
 sentence explaining why the agent is calling that tool. It is not private
@@ -161,8 +163,8 @@ Worklogs are an audit/debug trail on disk, **not** the agents' working memory:
 
 - **Per-instance worklog** — `agent-state/<role>/worklog/<run>/<role>_<n>.md`:
   each agent instance's own audit record (not shared between Coder and Reviewer).
-- **Optimizer trace** — `agent-state/workflow/optimizer-traces/<run>.jsonl`:
-  append-only coder↔reviewer handoffs for offline training.
+- **Optimizer trace** — next to each session as `*.optimizer_trace.jsonl` (and
+  `agent-state/workflow/optimizer-traces/` when no session dir is set).
 - **Session state** — `agent-state/pm/session-history/`, per-session
   `*.todo_list.md`, and planner/presenter worklogs.
 
@@ -244,7 +246,7 @@ Training eval/train reads `evals/langbridge-bench/specs/` by default. See
 ### Models & providers
 
 Langbridge is **not tied to a single vendor**. Package defaults in
-`src/langbridge_cli/config.json` use **Moonshot Kimi**; you can switch to **OpenAI**
+`src/langbridge_code/config.json` use **Moonshot Kimi**; you can switch to **OpenAI**
 (or point Moonshot at a compatible base URL) without changing agent code.
 
 | Provider (`api.provider`) | Default model | API used | API key (env or `api_keys.*`) |
@@ -282,7 +284,7 @@ Back to Kimi (defaults):
 
 ### API keys
 
-On first run, `langbridge-cli` asks for an API key for the **active** provider and
+On first run, `langbridge-code` asks for an API key for the **active** provider and
 saves it to `~/.langbridge/config.json` under `api_keys.<provider>`. Kimi and
 OpenAI keys can live side by side:
 
@@ -298,7 +300,7 @@ OpenAI keys can live side by side:
 Environment overrides: `MOONSHOT_API_KEY` / `KIMI_API_KEY` (Kimi),
 `OPENAI_API_KEY` (OpenAI), `LANGBRIDGE_API_PROVIDER`, `LANGBRIDGE_MODEL`.
 
-Copy any section from `src/langbridge_cli/config.json` into
+Copy any section from `src/langbridge_code/config.json` into
 `~/.langbridge/config.json` to override limits, paths, or tool budgets.
 ### Textual UI (default)
 
@@ -313,7 +315,7 @@ uv run langbridge
 <img src="assets/tui-screenshot.png" alt="Textual UI" width="720">
 
 While developing locally, prefer `uv run langbridge` (editable install) so code
-changes take effect immediately. Use `uv sync --reinstall-package langbridge-cli
+changes take effect immediately. Use `uv sync --reinstall-package langbridge-code
 --no-editable` only when you need a non-editable install.
 
 **Commands** (type in the prompt):
@@ -389,13 +391,13 @@ from the first argument (or stdin), auto-approves write tools, and exits when th
 loop finishes. This is the path the SWE-bench eval drives.
 
 ```bash
-uv run python -m langbridge_cli.headless "fix the failing test in foo/bar.py"
+uv run python -m langbridge_code.headless "fix the failing test in foo/bar.py"
 ```
 
 Or pipe the task in on stdin:
 
 ```bash
-echo "add a --verbose flag to the CLI" | uv run python -m langbridge_cli.headless
+echo "add a --verbose flag to the CLI" | uv run python -m langbridge_code.headless
 ```
 
 ### Debug
