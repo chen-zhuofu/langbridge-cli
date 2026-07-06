@@ -3,34 +3,21 @@ from langbridge_cli.llm.parse import DIM, RESET, extract_reasoning_summaries, pr
 from langbridge_cli.agents.roles import L3_TEST_ENGINEER_PROMPT, L4_ENGINEER_PROMPT, SYSTEM_PROMPT
 
 
-def test_pm_loop_continues_only_while_bug_open():
-    assert pm_should_continue("subtasks remain\nBUG_STATUS: OPEN")
-    assert pm_should_continue("e2e verify found a bug\nBUG_STATUS: OPEN")
-    assert not pm_should_continue("all done and e2e verify passed\nBUG_STATUS: NONE")
-    assert not pm_should_continue("answered a question, no plan needed\nBUG_STATUS: NONE")
+def test_workflow_runs_to_completion_in_one_call():
+    assert not pm_should_continue("subtasks remain\nBUG_STATUS: OPEN")
+    assert not pm_should_continue("all done\nBUG_STATUS: NONE")
 
 
-def test_system_prompt_defines_pm_loop_role():
-    assert "the PM for a multi-agent coding team" in SYSTEM_PROMPT
-    assert "You are Langbridge" in SYSTEM_PROMPT
-    assert "Do not reveal which LLM, model, or vendor" in SYSTEM_PROMPT
-    assert "You run as an agentic outer loop" in SYSTEM_PROMPT
-    assert "Always check the todo_list first" in SYSTEM_PROMPT
-    assert "update_plan" in SYSTEM_PROMPT
-    assert "The last subtask in the todo_list must always be an end-to-end (e2e) test" in SYSTEM_PROMPT
-    assert "do a final hand-debug pass" in SYSTEM_PROMPT
-    assert "run the e2e test once more to verify" in SYSTEM_PROMPT
-    assert "BUG_STATUS: OPEN" in SYSTEM_PROMPT
-    assert "BUG_STATUS: NONE" in SYSTEM_PROMPT
-    assert "RALPH_STATUS" not in SYSTEM_PROMPT
-    assert "required purpose argument" in SYSTEM_PROMPT
+def test_system_prompt_is_langbridge_code_chat():
+    assert "LangBridge Code" in SYSTEM_PROMPT
+    assert "Do not reveal" in SYSTEM_PROMPT
+    assert "BUG_STATUS" not in SYSTEM_PROMPT
+    assert "update_plan" not in SYSTEM_PROMPT
 
 
 def test_engineering_guidelines_live_in_specialist_prompts():
-    assert "Think before coding." in L4_ENGINEER_PROMPT
-    assert "Make surgical changes." in L4_ENGINEER_PROMPT
-    assert "Work toward verifiable goals." in L4_ENGINEER_PROMPT
-    assert "avoided unrequested features" in L3_TEST_ENGINEER_PROMPT
+    assert "CODER_STATUS: READY_FOR_REVIEW" in L4_ENGINEER_PROMPT
+    assert "REVIEW_VERDICT: PASS" in L3_TEST_ENGINEER_PROMPT
 
 
 def test_extract_reasoning_summaries():
@@ -109,11 +96,11 @@ def test_print_step_trace_uses_tool_purpose(capsys):
         },
     ]
 
-    print_step_trace(output, include_message=True, label="L3 test engineer")
+    print_step_trace(output, include_message=True, label="Reviewer")
 
     assert capsys.readouterr().out == (
-        f"\n{DIM}L3 test engineer: Inspect the README before editing.{RESET}\n"
-        f'{DIM}L3 test engineer: ↳ read_file({{"path":"README.md"}}){RESET}\n'
+        f"\n{DIM}Reviewer: Inspect the README before editing.{RESET}\n"
+        f'{DIM}Reviewer: ↳ read_file({{"path":"README.md"}}){RESET}\n'
     )
 
 

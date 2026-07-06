@@ -36,12 +36,12 @@ def test_format_approval_request_includes_role_tool_and_path():
     )
 
 
-def test_format_approval_request_summarizes_l4_delegate_task():
+def test_format_approval_request_summarizes_delegate_task():
     assert (
         format_approval_request(
-            "PM agent",
-            "ask_l4_engineer",
-            {"task": "Add a third monster to the default game."},
+            "Planner",
+            "update_plan",
+            {"content": "# Todo\n- [ ] [coding] Add monster"},
         )
-        == "PM agent: approve ask_l4_engineer? Task: Add a third monster to the default game."
+        == "Planner: approve update_plan?"
     )

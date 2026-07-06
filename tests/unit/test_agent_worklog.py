@@ -9,7 +9,7 @@ def test_worklog_writes_nothing_without_an_active_run():
 
 
 def test_worklog_appends_to_one_instance_file(tmp_path, monkeypatch):
-    monkeypatch.setattr("langbridge_cli.settings.L4_WORKLOG_DIR", tmp_path)
+    monkeypatch.setattr("langbridge_cli.settings.CODER_WORKLOG_DIR", tmp_path)
     run_log = tmp_path / "session.json"
     instance_id = 1
 
@@ -22,36 +22,35 @@ def test_worklog_appends_to_one_instance_file(tmp_path, monkeypatch):
             "arguments": '{"purpose":"look at the file","path":"README.md"}',
         },
     ]
-    agent_worklog.write_worklog_step(run_log, "L4 engineer", instance_id, 2, 0, output)
+    agent_worklog.write_worklog_step(run_log, "Coder", instance_id, 2, 0, output)
     agent_worklog.write_worklog_observation(
-        run_log, "L4 engineer", instance_id, 2, 0, {"call_id": "c1", "output": "file contents here"}
+        run_log, "Coder", instance_id, 2, 0, {"call_id": "c1", "output": "file contents here"}
     )
-    agent_worklog.write_worklog_finish(run_log, "L4 engineer", instance_id, 2, "L4_STATUS: READY_FOR_REVIEW")
+    agent_worklog.write_worklog_finish(run_log, "Coder", instance_id, 2, "CODER_STATUS: READY_FOR_REVIEW")
 
-    # Grouped per run, named per instance: <run stem>/l4_<id>.md
-    text = (tmp_path / "session" / "l4_1.md").read_text(encoding="utf-8")
-    assert "[L4 engineer] turn 2 · step 0" in text
+    text = (tmp_path / "session" / "coder_1.md").read_text(encoding="utf-8")
+    assert "[Coder] turn 2 · step 0" in text
     assert "Inspect repo." in text
     assert "read_file" in text
     assert "purpose: look at the file" in text
     assert '"path": "README.md"' in text
     assert "file contents here" in text
-    assert "[L4 engineer] turn 2 · FINAL" in text
-    assert "L4_STATUS: READY_FOR_REVIEW" in text
+    assert "[Coder] turn 2 · FINAL" in text
+    assert "CODER_STATUS: READY_FOR_REVIEW" in text
 
 
 def test_distinct_instances_get_distinct_files(tmp_path, monkeypatch):
-    monkeypatch.setattr("langbridge_cli.settings.L3_WORKLOG_DIR", tmp_path)
+    monkeypatch.setattr("langbridge_cli.settings.REVIEWER_WORKLOG_DIR", tmp_path)
     run_log = tmp_path / "session.json"
 
-    first = agent_worklog.new_worklog_id(run_log, "L3 test engineer")
-    second = agent_worklog.new_worklog_id(run_log, "L3 test engineer")
+    first = agent_worklog.new_worklog_id(run_log, "Reviewer")
+    second = agent_worklog.new_worklog_id(run_log, "Reviewer")
     assert first != second
 
-    agent_worklog.write_worklog_finish(run_log, "L3 test engineer", first, 1, "REVIEW_VERDICT: NEEDS_WORK")
-    agent_worklog.write_worklog_finish(run_log, "L3 test engineer", second, 1, "REVIEW_VERDICT: PASS")
+    agent_worklog.write_worklog_finish(run_log, "Reviewer", first, 1, "REVIEW_VERDICT: NEEDS_WORK")
+    agent_worklog.write_worklog_finish(run_log, "Reviewer", second, 1, "REVIEW_VERDICT: PASS")
 
     run_dir = tmp_path / "session"
-    assert (run_dir / f"l3_{first}.md").read_text(encoding="utf-8").count("FINAL") == 1
-    assert (run_dir / f"l3_{second}.md").read_text(encoding="utf-8").count("FINAL") == 1
-    assert {p.name for p in run_dir.glob("l3_*.md")} == {f"l3_{first}.md", f"l3_{second}.md"}
+    assert (run_dir / f"reviewer_{first}.md").read_text(encoding="utf-8").count("FINAL") == 1
+    assert (run_dir / f"reviewer_{second}.md").read_text(encoding="utf-8").count("FINAL") == 1
+    assert {p.name for p in run_dir.glob("reviewer_*.md")} == {f"reviewer_{first}.md", f"reviewer_{second}.md"}

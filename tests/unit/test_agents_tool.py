@@ -1,17 +1,43 @@
-import langbridge_cli.agents.agent as agent_module
-from langbridge_cli.agents.agent import add_hidden_tool_context, run_l4_component, run_tool_call
-from langbridge_cli.agents.multi_agent import L4_TOOL_SCHEMAS, max_steps_report, run_specialist_agent, run_specialist_tool_call
-from langbridge_cli.tools import MAIN_TOOL_SCHEMAS, MAIN_TOOLS, TOOL_SCHEMAS, TOOLS
-from langbridge_cli.agents.multi_agent import l3_review_passed
-from langbridge_cli.tools.agents import ask_l4_engineer
+from langbridge_cli.agents.agent import pm_should_continue, run_l4_component
+from langbridge_cli.agents.multi_agent import (
+    L4_TOOL_SCHEMAS,
+    max_steps_report,
+    reviewer_review_passed,
+    run_specialist_agent,
+    run_specialist_tool_call,
+)
+from langbridge_cli.agents.roles import (
+    CHAT_SYSTEM_PROMPT,
+    CODER_ENGINEER_PROMPT,
+    L3_TEST_ENGINEER_PROMPT,
+    L4_ENGINEER_PROMPT,
+    SYSTEM_PROMPT,
+)
+from langbridge_cli.tools import MAIN_TOOL_SCHEMAS, MAIN_TOOLS, TOOLS
 
 
-def test_pm_tools_are_registered():
-    assert "ask_l3_test_engineer" not in TOOLS
-    assert "ask_l4_engineer" in TOOLS
-    assert any(schema["name"] == "ask_l4_engineer" for schema in TOOL_SCHEMAS)
-    assert any(schema["name"] == "delete_file" for schema in L4_TOOL_SCHEMAS)
-    assert any(schema["name"] == "bash" for schema in L4_TOOL_SCHEMAS)
+def test_workflow_does_not_continue_after_one_turn():
+    assert not pm_should_continue("subtasks remain\nBUG_STATUS: OPEN")
+    assert not pm_should_continue("all done\nBUG_STATUS: NONE")
+
+
+def test_chat_system_prompt():
+    assert SYSTEM_PROMPT == CHAT_SYSTEM_PROMPT
+    assert "LangBridge Code" in SYSTEM_PROMPT
+    assert "Do not reveal" in SYSTEM_PROMPT
+    assert "BUG_STATUS" not in SYSTEM_PROMPT
+
+
+def test_engineering_guidelines_live_in_specialist_prompts():
+    assert "Think before coding." not in CODER_ENGINEER_PROMPT  # slim workflow prompt
+    assert "CODER_STATUS: READY_FOR_REVIEW" in CODER_ENGINEER_PROMPT
+    assert "REVIEW_VERDICT: PASS" in L3_TEST_ENGINEER_PROMPT
+    assert L4_ENGINEER_PROMPT == CODER_ENGINEER_PROMPT
+
+
+def test_main_tools_exclude_legacy_pm_specialists():
+    assert "ask_l4_engineer" not in TOOLS
+    assert "ask_l5_engineer" not in TOOLS
     assert set(MAIN_TOOLS) == {
         "list_dir",
         "glob",
@@ -19,8 +45,6 @@ def test_pm_tools_are_registered():
         "grep",
         "bash",
         "read_webpage",
-        "ask_l4_engineer",
-        "ask_l5_engineer",
         "update_plan",
     }
     assert [schema["name"] for schema in MAIN_TOOL_SCHEMAS] == [
@@ -30,75 +54,21 @@ def test_pm_tools_are_registered():
         "grep",
         "bash",
         "read_webpage",
-        "ask_l4_engineer",
-        "ask_l5_engineer",
         "update_plan",
     ]
+    assert any(schema["name"] == "delete_file" for schema in L4_TOOL_SCHEMAS)
     for schema in MAIN_TOOL_SCHEMAS + L4_TOOL_SCHEMAS:
         assert "purpose" in schema["parameters"]["properties"]
         assert "purpose" in schema["parameters"]["required"]
 
 
-def test_hidden_tool_context_is_passed_only_when_supported():
-    def specialist_tool(task, api_key=None, model=None, trace_sink=None, approval_callback=None):
-        return task, api_key, model, trace_sink, approval_callback
-
-    def trace_sink(event):
-        return event
-
-    def approval_callback(role, name, arguments):
-        return True
-
-    arguments = add_hidden_tool_context(
-        specialist_tool,
-        {"task": "verify tests"},
-        "key",
-        "model",
-        trace_sink,
-        approval_callback,
-    )
-
-    assert arguments == {
-        "task": "verify tests",
-        "api_key": "key",
-        "model": "model",
-        "trace_sink": trace_sink,
-        "approval_callback": approval_callback,
-    }
+def test_reviewer_passed_requires_pass_verdict():
+    assert reviewer_review_passed("REVIEW_VERDICT: PASS\nEvidence: tests passed")
+    assert not reviewer_review_passed("REVIEW_VERDICT: NEEDS_WORK\nIssues: missing coverage")
+    assert not reviewer_review_passed("REVIEW_VERDICT: FAIL\nIssues: tests failed")
 
 
-def test_pm_tool_strips_purpose_before_execution(monkeypatch):
-    monkeypatch.setitem(agent_module.MAIN_TOOLS, "read_file", lambda **arguments: sorted(arguments))
-
-    result = run_tool_call(
-        {
-            "type": "function_call",
-            "name": "read_file",
-            "call_id": "call_1",
-            "arguments": '{"purpose":"Inspect the target file.","path":"README.md"}',
-        }
-    )
-
-    assert result == {
-        "type": "function_call_output",
-        "call_id": "call_1",
-        "output": ["path"],
-    }
-
-
-def test_l4_tool_is_a_placeholder_handled_by_the_runtime():
-    # The living L4<->L3 loop runs in the PM runtime (run_tool_call -> run_l4_component);
-    # the registered tool itself is just a placeholder that returns nothing.
-    assert ask_l4_engineer("implement feature", "context", "feedback") == ""
-
-
-def test_l3_review_passed_requires_pass_verdict():
-    assert l3_review_passed("REVIEW_VERDICT: PASS\nEvidence: tests passed")
-    assert not l3_review_passed("REVIEW_VERDICT: NEEDS_WORK\nIssues: missing coverage")
-    assert not l3_review_passed("REVIEW_VERDICT: FAIL\nIssues: tests failed")
-
-
-def test_l4_write_tool_requires_approval(monkeypatch):
+def test_coder_write_tool_requires_approval(monkeypatch):
     monkeypatch.setattr("langbridge_cli.agents.multi_agent.approve_l4_write_tool", lambda name, arguments: False)
 
     result = run_specialist_tool_call(
@@ -109,7 +79,7 @@ def test_l4_write_tool_requires_approval(monkeypatch):
             "arguments": '{"path":"x.py","content":"print(1)"}',
         },
         {"create_file": lambda **arguments: "created"},
-        "L4 engineer",
+        "Coder",
     )
 
     assert result == {
@@ -119,7 +89,7 @@ def test_l4_write_tool_requires_approval(monkeypatch):
     }
 
 
-def test_l4_write_tool_runs_after_approval(monkeypatch):
+def test_coder_write_tool_runs_after_approval(monkeypatch):
     monkeypatch.setattr("langbridge_cli.agents.multi_agent.approve_l4_write_tool", lambda name, arguments: True)
 
     result = run_specialist_tool_call(
@@ -130,7 +100,7 @@ def test_l4_write_tool_runs_after_approval(monkeypatch):
             "arguments": '{"path":"x.py","content":"print(1)"}',
         },
         {"create_file": lambda **arguments: f"created {arguments['path']}"},
-        "L4 engineer",
+        "Coder",
     )
 
     assert result == {
@@ -151,7 +121,7 @@ def test_specialist_tool_strips_purpose_before_execution(monkeypatch):
             "arguments": '{"purpose":"Create the target file.","path":"x.py","content":"print(1)"}',
         },
         {"create_file": lambda **arguments: sorted(arguments)},
-        "L4 engineer",
+        "Coder",
     )
 
     assert result == {
@@ -161,45 +131,7 @@ def test_specialist_tool_strips_purpose_before_execution(monkeypatch):
     }
 
 
-def test_pm_write_tool_uses_approval_callback(monkeypatch):
-    approvals = []
-
-    monkeypatch.setattr(agent_module, "run_l4_component", lambda *args, **kwargs: "L4 report")
-
-    result = run_tool_call(
-        {
-            "type": "function_call",
-            "name": "ask_l4_engineer",
-            "call_id": "call_1",
-            "arguments": '{"task":"implement feature","context":"repo"}',
-        },
-        approval_callback=lambda role, name, arguments: approvals.append((role, name, arguments)) or True,
-    )
-
-    assert approvals == [("PM agent", "ask_l4_engineer", {"task": "implement feature", "context": "repo"})]
-    assert result["output"] == "L4 report"
-
-
-def test_pm_write_tool_denied_without_approval_callback(monkeypatch):
-    monkeypatch.setattr(agent_module, "approve_write_tool", lambda name, arguments, approval_callback=None: False)
-
-    result = run_tool_call(
-        {
-            "type": "function_call",
-            "name": "ask_l4_engineer",
-            "call_id": "call_1",
-            "arguments": '{"task":"implement feature"}',
-        }
-    )
-
-    assert result == {
-        "type": "function_call_output",
-        "call_id": "call_1",
-        "output": "Tool error: ask_l4_engineer was not approved",
-    }
-
-
-def test_l4_write_tool_uses_approval_callback():
+def test_coder_write_tool_uses_approval_callback():
     approvals = []
 
     result = run_specialist_tool_call(
@@ -210,65 +142,29 @@ def test_l4_write_tool_uses_approval_callback():
             "arguments": '{"path":"x.py","content":"print(1)"}',
         },
         {"create_file": lambda **arguments: f"created {arguments['path']}"},
-        "L4 engineer",
+        "Coder",
         approval_callback=lambda role, name, arguments: approvals.append((role, name, arguments)) or True,
     )
 
-    assert approvals == [("L4 engineer", "create_file", {"path": "x.py", "content": "print(1)"})]
+    assert approvals == [("Coder", "create_file", {"path": "x.py", "content": "print(1)"})]
     assert result["output"] == "created x.py"
 
 
-def test_pm_appends_l3_review_when_l4_ready(monkeypatch):
-    calls = []
-
-    def fake_l3(api_key, model, task, context, **kwargs):
-        calls.append((api_key, model, task, context))
-        return "REVIEW_VERDICT: PASS\nEvidence: tests pass"
-
-    def fake_l4(api_key, model, task, context, feedback="", **kwargs):
-        return "L4_STATUS: READY_FOR_REVIEW\nSummary: calculator implemented"
-
-    monkeypatch.setattr("langbridge_cli.agents.multi_agent.run_l3_test_engineer", fake_l3)
-    monkeypatch.setattr("langbridge_cli.agents.multi_agent.run_l4_engineer", fake_l4)
-
-    output = run_l4_component(
-        "key",
-        "model",
-        {"task": "implement calculator", "context": "repo context"},
+def test_run_l4_component_delegates_to_coder_reviewer(monkeypatch):
+    monkeypatch.setattr(
+        "langbridge_cli.agents.agent.run_coder_reviewer_loop",
+        lambda *args, **kwargs: (True, "CODER_STATUS: READY_FOR_REVIEW\nSummary: done"),
     )
 
-    assert "PM_DETERMINISTIC_L3_REVIEW:" in output
-    assert "REVIEW_VERDICT: PASS" in output
-    assert "PM_REVIEW_STATUS: OK" in output
-    assert calls[0][:3] == ("key", "model", "implement calculator")
-    assert "repo context" in calls[0][3]
-    assert "L4 completed work and is ready for PM-triggered L3 review." in calls[0][3]
-    assert "L4_STATUS: READY_FOR_REVIEW" in calls[0][3]
+    output = run_l4_component("key", "model", {"task": "implement calculator", "context": "repo context"})
+
+    assert "WORKFLOW_REVIEW_STATUS: OK" in output
+    assert "READY_FOR_REVIEW" in output
 
 
-def test_pm_does_not_review_l4_when_not_ready(monkeypatch):
-    def fake_l3(api_key, model, task, context, **kwargs):
-        raise AssertionError("L3 should not run unless L4 is ready for review")
-
-    def fake_l4(api_key, model, task, context, feedback="", **kwargs):
-        return "L4_STATUS: IN_PROGRESS\nSummary: still writing tests"
-
-    monkeypatch.setattr("langbridge_cli.agents.multi_agent.run_l3_test_engineer", fake_l3)
-    monkeypatch.setattr("langbridge_cli.agents.multi_agent.run_l4_engineer", fake_l4)
-
-    output = run_l4_component(
-        "key",
-        "model",
-        {"task": "implement calculator"},
-    )
-
-    assert output.startswith("L4_STATUS: IN_PROGRESS")
-    assert "PM_DETERMINISTIC_L3_REVIEW" not in output
-
-
-def test_l4_max_steps_report_includes_recent_tool_activity():
+def test_coder_max_steps_report_includes_recent_tool_activity():
     report = max_steps_report(
-        "L4 engineer",
+        "Coder",
         [
             {
                 "call": {
@@ -284,23 +180,19 @@ def test_l4_max_steps_report_includes_recent_tool_activity():
         ],
     )
 
-    assert report.startswith("L4_STATUS: IN_PROGRESS")
+    assert report.startswith("CODER_STATUS: IN_PROGRESS")
     assert "maximum specialist tool-call steps" in report
     assert 'delete_file({"path":"synthetic-env/calculator.py"})' in report
-    assert "Deleted synthetic-env/calculator.py." in report
 
 
 def test_specialist_max_steps_fallback_reports_tool_history(monkeypatch):
-    calls = []
-
     def fake_response(api_key, model, messages, tool_schemas, label):
-        calls.append(messages)
         return {
             "output": [
                 {
                     "type": "function_call",
                     "name": "delete_file",
-                    "call_id": f"call_{len(calls)}",
+                    "call_id": "call_1",
                     "arguments": '{"path":"synthetic-env/calculator.py"}',
                 }
             ]
@@ -317,9 +209,8 @@ def test_specialist_max_steps_fallback_reports_tool_history(monkeypatch):
         "user",
         [{"name": "delete_file"}],
         {"delete_file": lambda path: f"Deleted {path}."},
-        "L4 engineer",
+        "Coder",
     )
 
-    assert report.startswith("L4_STATUS: IN_PROGRESS")
+    assert report.startswith("CODER_STATUS: IN_PROGRESS")
     assert "delete_file" in report
-    assert "Deleted synthetic-env/calculator.py." in report

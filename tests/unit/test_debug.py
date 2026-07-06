@@ -26,8 +26,8 @@ def test_llm_debug_output_formats_request_and_response(capsys, monkeypatch):
                 },
                 {
                     "type": "function_call",
-                    "name": "ask_l4_engineer",
-                    "arguments": '{"purpose":"Delegate the scoped implementation to L4.","task":"implement calculator"}',
+                    "name": "update_plan",
+                    "arguments": '{"purpose":"Write the todo list.","content":"# Todo"}',
                     "call_id": "call_1",
                 }
             ]
@@ -37,8 +37,8 @@ def test_llm_debug_output_formats_request_and_response(capsys, monkeypatch):
     output = capsys.readouterr().out
     assert output == (
         "[LLM DEBUG] PM agent output: 1. message: Ask L4 to implement the calculator. | "
-        '2. purpose: Delegate the scoped implementation to L4. -> function_call '
-        'ask_l4_engineer({"task":"implement calculator"}) '
+        '2. purpose: Write the todo list. -> function_call '
+        'update_plan({"content":"# Todo"}) '
         "call_id=call_1\n"
     )
     assert "reasoning" not in output
