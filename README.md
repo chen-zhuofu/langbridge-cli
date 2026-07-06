@@ -152,19 +152,19 @@ The PM works read-only on the workspace and delegates all writes to specialists.
 PM tools:
 
 - `list_dir`, `glob`, `read_file`, `grep`: inspect the workspace (glob/grep use ripgrep)
-- `execute_program`: run a non-interactive program (e.g. bring the app up)
+- `bash`: run a non-interactive shell command (installs, builds, git, scripts)
 - `read_webpage`: fetch the text of a URL (docs, an issue, reference material)
 - `update_plan`: write or update the `todo_list`
 - `ask_l4_engineer`: delegate a normal `component_task` to the L4 engineer
 - `ask_l5_engineer`: delegate a HARD `component_task` to the L5 senior engineer
 
 Specialists get the write and test tools. L4 and L5 share `edit_file`,
-`create_file`, `delete_file`, `run_tests`, `execute_program`, and `read_skill`
+`create_file`, `delete_file`, `run_tests`, `bash`, and `read_skill`
 on top of the read-only file tools; L3 gets the read-only file tools plus
 `run_tests`. Both delegations trigger PM-driven L3 review when the work is ready.
 
 File tools are limited to the directory where you start the CLI. The write tools
-(`create_file`, `edit_file`, `delete_file`, `install_python_packages`) and the
+(`create_file`, `edit_file`, `delete_file`, `bash`) and the
 `ask_l4_engineer` / `ask_l5_engineer` delegations ask for approval first.
 
 On-demand skills: L4 and L5 see a catalog of skills (short playbooks) in their

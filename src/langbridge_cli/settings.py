@@ -21,7 +21,7 @@ WRITE_TOOLS = {
     "create_file",
     "delete_file",
     "edit_file",
-    "install_python_packages",
+    "bash",
     "ask_l4_engineer",
     "ask_l5_engineer",
 }
@@ -71,7 +71,6 @@ def _bind(cfg):
     fs = cfg["tools"]["filesystem"]
     execution = cfg["tools"]["execution"]
     testing = cfg["tools"]["testing"]
-    packages = cfg["tools"]["packages"]
     web = cfg["tools"]["web"]
     debug = cfg["tools"]["debug"]
     training = cfg["training"]
@@ -114,9 +113,6 @@ def _bind(cfg):
         "MAX_TEST_OUTPUT_CHARS": testing["max_output_chars"],
         "DEFAULT_TEST_TIMEOUT_SECONDS": testing["default_timeout_seconds"],
         "MAX_TEST_TIMEOUT_SECONDS": testing["max_timeout_seconds"],
-        "MAX_INSTALL_OUTPUT_CHARS": packages["max_output_chars"],
-        "DEFAULT_INSTALL_TIMEOUT_SECONDS": packages["default_timeout_seconds"],
-        "MAX_INSTALL_TIMEOUT_SECONDS": packages["max_timeout_seconds"],
         "DEFAULT_WEB_TIMEOUT_SECONDS": web["default_timeout_seconds"],
         "MAX_WEB_TIMEOUT_SECONDS": web["max_timeout_seconds"],
         "MAX_WEBPAGE_CHARS": web["max_webpage_chars"],

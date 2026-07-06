@@ -38,11 +38,7 @@ from langbridge_cli.persistence.agent_worklog import (
 from langbridge_cli.persistence.worklog import append_worklog_entry, start_worklog
 from langbridge_cli.agents.limits import now, over_context_budget, over_time_budget
 from langbridge_cli.agents import control
-from langbridge_cli.persistence.context import (
-    RecentFileStore,
-    compact_messages_if_needed,
-    record_tool_read,
-)
+from langbridge_cli.persistence.context import compact_messages_if_needed
 
 
 def run_pm_loop(
@@ -73,7 +69,6 @@ def run_pm_loop(
     write_worklog_received(run_log_path, "PM agent", worklog_id, turn_id, str(received))
     turn_start = now()
     episode_start = turn_start
-    file_store = RecentFileStore()
     pm_round = 0
     step = 0
     while step < MAX_AGENT_STEPS:
@@ -94,11 +89,10 @@ def run_pm_loop(
             write_worklog_step(run_log_path, "PM agent", worklog_id, turn_id, step, step_response)
             for call in tool_calls:
                 tool_output = run_tool_call(call, api_key, model, trace_sink, approval_callback, run_log_path, turn_id)
-                record_tool_read(file_store, call.get("name"), call.get("arguments"), tool_output.get("output", ""))
                 messages.append(tool_output)
                 write_tool_calls_result_log(run_log_path, turn_id, step, tool_output)
                 write_worklog_observation(run_log_path, "PM agent", worklog_id, turn_id, step, tool_output)
-            compact_messages_if_needed(messages, max_context_tokens=MAX_AGENT_CONTEXT_TOKENS, file_store=file_store, api_key=api_key, model=model, label="PM compaction")
+            compact_messages_if_needed(messages, max_context_tokens=MAX_AGENT_CONTEXT_TOKENS, api_key=api_key, model=model, label="PM compaction")
             step += 1
             continue
 

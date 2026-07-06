@@ -3,7 +3,7 @@
   "status": "ok",
   "repo": "tqdm/tqdm",
   "base_commit": "b9507b31beb67c9903073f8ae6f89c9735c5f1d0",
-  "problem_statement": "Proposal: option for making tqdm quiet until some time has passed\n\nLong-running operations waste time. Therefore, it's a common pattern to cache their results, so that they finish instantly the next time we run them. In the first case, tqdm is useful, since it tells us how many episodes of a Netflix series we will be able to binge-watch before the operation has run its course. In the second case, tqdm only clutters the terminal. Therefore, it would be useful to have a parameter that makes tqdm wait a bit before it displays the progress bar. This way, the progress bar would only be shown for long-running operations. The `leave=False` parameter is a step in the right direction, but it goes too far and erases useful information about the total time of long operations.\n\n---\n\nAllow hiding the progress bar for very fast loops (feature request)\n\n- [X] I have visited the [source website], and in particular\r\n  read the [known issues]\r\n- [X] I have searched through the [issue tracker] for duplicates\r\n- [X] I have mentioned version numbers, operating system and\r\n  environment, where applicable:\r\n  ```python\r\n  import tqdm, sys\r\n  print(tqdm.__version__, sys.version, sys.platform)\r\n  ```\r\n  ```\r\n  4.31.1 3.7.2 (default, Dec 29 2018, 06:19:36) \r\n  [GCC 7.3.0] linux\r\n  ```\r\n\r\n  [source website]: https://github.com/tqdm/tqdm/\r\n  [known issues]: https://github.com/tqdm/tqdm/#faq-and-known-issues\r\n  [issue tracker]: https://github.com/tqdm/tqdm/issues?q=\r\n\r\nQt's QProgressDialog implements the `minimumDuration` property (https://doc.qt.io/qt-5/qprogressdialog.html#minimumDuration-prop) which is documented as follows:\r\n\r\n> This property holds the time that must pass before the dialog appears\r\n> If the expected duration of the task is less than the minimumDuration, the dialog will not appear at all. This prevents the dialog popping up for tasks that are quickly over. For tasks that are expected to exceed the minimumDuration, the dialog will pop up after the minimumDuration time or as soon as any progress is set.\r\n> If set to 0, the dialog is always shown as soon as any progress is set. The default is 4000 milliseconds.\r\n\r\nI believe this would be a nice feature to have in tqdm as well (obviously its default value would have to be zero for backcompat).",
+  "problem_statement": "Add a `delay` parameter to tqdm progress bars\n\nImplement a new `delay` float parameter on `tqdm` (default `0` for backward compatibility).\n\nWhen `delay > 0`, the progress bar must not write any output until `delay` seconds have elapsed since the bar was created. After that threshold, updates should render normally.\n\nExpected behavior:\n- `tqdm(total=2, delay=3)` with mocked time:\n  - At elapsed time 2s, `update(1)` → no output written yet\n  - At elapsed time 4s, `update(1)` → output appears\n- If the bar is closed before ever being displayed, `close()` should not try to clear the screen.\n\nThis is similar to Qt's `QProgressDialog.minimumDuration` — hide the bar for fast operations.",
   "test_files": [
     "tests/tests_main.py",
     "tests/tests_tqdm.py"
@@ -88,5 +88,7 @@
     "tests/tests_tqdm.py::test_write",
     "tests/tests_tqdm.py::test_write_bytes"
   ],
-  "hard": false
+  "hard": false,
+  "task_kind": "feature",
+  "problem_statement_source": "rewritten"
 }

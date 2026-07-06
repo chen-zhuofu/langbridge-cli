@@ -3,7 +3,7 @@
   "status": "ok",
   "repo": "pytest-dev/pytest",
   "base_commit": "5dfa38541becfb77d0f52cac4cc8cce71849ab61",
-  "problem_statement": "Allow to dynamically create fixture in plugin\n\n<!--\r\nThanks for suggesting a feature!\r\n\r\nQuick check-list while suggesting features:\r\n-->\r\n\r\n#### What's the problem this feature will solve?\r\n\r\nI am the author of [next-actions/pytest-mh](https://github.com/next-actions/pytest-mh) which is a multihost testing plugin for pytest. We are doing some black magic to dynamically create test fixtures and map them to some custom objects. Some user-focused details are described [here](https://pytest-mh.readthedocs.io/en/latest/topology.html#using-dynamic-multihost-fixtures-high-level-api) but TLDR we are doing this:\r\n\r\n```python\r\n@pytest.fixture\r\ndef pytest_fixture():\r\n    pass\r\n\r\ndef test_example(client, ldap, pytest_fixture):\r\n    pass\r\n```\r\n\r\nIn this scenario, `client` and `ldap` are passed to the test_example by setting it in `item.funcargs` in runtest hook to internal objects created per-tests. `pytest_fixture` is standard pytest fixture. This works nicely and it is using only public fields (I'm not sure if funcargs is documented, but at the very least it is not prefix with `_`).\r\n\r\nHowever, accessing these data from pytest fixture fails, obviously:\r\n\r\n```python\r\n@pytest.fixture\r\ndef pytest_fixture(client):\r\n    pass\r\n\r\ndef test_example(client, ldap, pytest_fixture):\r\n    pass\r\n```\r\n\r\n... because `client` is not a registered fixture. I probably could manage that by accessing pytest private stuff, but I'd like to avoid that.\r\n\r\nI would like to be able to create and delete fixture (at least function-scoped) inside hooks.\r\n\r\n#### Describe the solution you'd like\r\n\r\nProvide API to dynamically register and unregister fixtures from pytest hooks.\r\n\r\n#### Alternative Solutions\r\n\r\nCurrently, deep and private pytest objects and attributes are required.\r\n\r\n#### Additional context\r\n<!-- Add any other context, links, etc. about the feature here. -->",
+  "problem_statement": "Add public `pytest.register_fixture()` API for plugins\n\nPlugins sometimes need to register fixtures imperatively during collection (e.g. dynamically created multihost fixtures). Add a public API:\n\n```python\npytest.register_fixture(name=\"fix\", func=..., node=session_or_item, scope=\"function\", ...)\n```\n\nRequirements:\n- Export `register_fixture` from the top-level `pytest` package.\n- Delegate to the fixture manager's registration logic.\n- Replace internal `session._fixturemanager._register_fixture(...)` calls in pytest's own codebase with `fixtures.register_fixture(...)`.\n- Fixture visibility follows the collection tree: only items under `node` can request the fixture. Use `node=session` for global visibility.\n- When multiple fixtures share a name at different scopes, item-level fixtures must take precedence over session-level fixtures with correct chaining order.",
   "test_files": [
     "testing/python/fixtures.py"
   ],
@@ -221,5 +221,7 @@
     "testing/python/fixtures.py::test_subfixture_teardown_order",
     "testing/python/fixtures.py::test_yield_fixture_with_no_value"
   ],
-  "hard": false
+  "hard": false,
+  "task_kind": "feature",
+  "problem_statement_source": "rewritten"
 }

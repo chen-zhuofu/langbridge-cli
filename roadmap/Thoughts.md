@@ -1,3 +1,11 @@
+# 犹豫
+1.是否 juror 并行
+2.是否 pm制定的任务，并行处理
+好处加速
+坏处复杂度
+  管理任务状态
+  多agent多branch修改，merge conflict resolve
+
 > Note to self: update the README and amend the commit based on this design.
 
 # LangBridge: Loop-Engineering Architecture

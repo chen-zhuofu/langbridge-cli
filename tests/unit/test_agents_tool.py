@@ -3,22 +3,32 @@ from langbridge_cli.agents.agent import add_hidden_tool_context, run_l4_componen
 from langbridge_cli.agents.multi_agent import L4_TOOL_SCHEMAS, max_steps_report, run_specialist_agent, run_specialist_tool_call
 from langbridge_cli.tools import MAIN_TOOL_SCHEMAS, MAIN_TOOLS, TOOL_SCHEMAS, TOOLS
 from langbridge_cli.agents.multi_agent import l3_review_passed
-from langbridge_cli.tools.agents import ask_l3_test_engineer, ask_l4_engineer
+from langbridge_cli.tools.agents import ask_l4_engineer
 
 
-def test_l3_test_engineer_tool_is_registered():
-    assert "ask_l3_test_engineer" in TOOLS
-    assert any(schema["name"] == "ask_l3_test_engineer" for schema in TOOL_SCHEMAS)
+def test_pm_tools_are_registered():
+    assert "ask_l3_test_engineer" not in TOOLS
     assert "ask_l4_engineer" in TOOLS
     assert any(schema["name"] == "ask_l4_engineer" for schema in TOOL_SCHEMAS)
     assert any(schema["name"] == "delete_file" for schema in L4_TOOL_SCHEMAS)
-    assert set(MAIN_TOOLS) == {"list_dir", "glob", "read_file", "grep", "execute_program", "read_webpage", "ask_l4_engineer", "ask_l5_engineer", "update_plan"}
+    assert any(schema["name"] == "bash" for schema in L4_TOOL_SCHEMAS)
+    assert set(MAIN_TOOLS) == {
+        "list_dir",
+        "glob",
+        "read_file",
+        "grep",
+        "bash",
+        "read_webpage",
+        "ask_l4_engineer",
+        "ask_l5_engineer",
+        "update_plan",
+    }
     assert [schema["name"] for schema in MAIN_TOOL_SCHEMAS] == [
         "list_dir",
         "glob",
         "read_file",
         "grep",
-        "execute_program",
+        "bash",
         "read_webpage",
         "ask_l4_engineer",
         "ask_l5_engineer",
@@ -74,21 +84,6 @@ def test_pm_tool_strips_purpose_before_execution(monkeypatch):
         "call_id": "call_1",
         "output": ["path"],
     }
-
-
-def test_l3_tool_uses_runner(monkeypatch):
-    calls = []
-
-    def fake_runner(api_key, model, task, context):
-        calls.append((api_key, model, task, context))
-        return "L3 verdict"
-
-    monkeypatch.setattr("langbridge_cli.agents.multi_agent.run_l3_test_engineer", fake_runner)
-
-    result = ask_l3_test_engineer("verify tests", "changed tests/test_x.py", api_key="key", model="model")
-
-    assert result == "L3 verdict"
-    assert calls == [("key", "model", "verify tests", "changed tests/test_x.py")]
 
 
 def test_l4_tool_is_a_placeholder_handled_by_the_runtime():

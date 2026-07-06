@@ -22,11 +22,7 @@ from langbridge_cli.persistence.agent_worklog import (
 )
 from langbridge_cli.agents.limits import now, over_context_budget, over_time_budget
 from langbridge_cli.agents import control
-from langbridge_cli.persistence.context import (
-    RecentFileStore,
-    compact_messages_if_needed,
-    record_tool_read,
-)
+from langbridge_cli.persistence.context import compact_messages_if_needed
 
 
 L3_TOOL_NAMES = {"list_dir", "glob", "read_file", "grep", "run_tests"}
@@ -48,7 +44,7 @@ L4_TOOL_NAMES = {
     "create_file",
     "delete_file",
     "run_tests",
-    "execute_program",
+    "bash",
     "read_skill",
 }
 L4_TOOL_SCHEMAS = with_tool_purpose(
@@ -193,7 +189,6 @@ class SpecialistSession:
         self.write_guard = write_guard
         self.messages = [{"role": "system", "content": system_prompt}]
         self.tool_history = []
-        self.file_store = RecentFileStore()
         self.step = 0
         # This instance's own worklog file, so two L3s (or L4s) in the same review
         # never write into one another's trace.
@@ -223,7 +218,6 @@ class SpecialistSession:
                 tool_output = run_specialist_tool_call(
                     call, self.tools, self.label, approval_callback=self.approval_callback, write_guard=self.write_guard
                 )
-                record_tool_read(self.file_store, call.get("name"), call.get("arguments"), tool_output.get("output", ""))
                 self.tool_history.append({"call": call, "output": tool_output})
                 self.messages.append(tool_output)
                 write_worklog_observation(self.run_log_path, self.label, self.worklog_id, self.turn_id, self.step, tool_output)
@@ -231,7 +225,6 @@ class SpecialistSession:
             compact_messages_if_needed(
                 self.messages,
                 max_context_tokens=MAX_SPECIALIST_CONTEXT_TOKENS,
-                file_store=self.file_store,
                 api_key=self.api_key,
                 model=self.model,
                 label=f"{self.label} compaction",

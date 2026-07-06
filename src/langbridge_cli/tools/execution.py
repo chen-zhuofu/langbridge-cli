@@ -13,20 +13,18 @@ WORKSPACE_ROOT = Path.cwd().resolve()
 TOOL_SCHEMAS = [
     {
         "type": "function",
-        "name": "execute_program",
-        "description": "Execute a non-interactive program under the current workspace.",
+        "name": "bash",
+        "description": (
+            "Run a non-interactive shell command under the current workspace "
+            "(via bash -c). Use for installs (e.g. uv add pytest), builds, "
+            "git, and one-off scripts. Pipes and && are allowed."
+        ),
         "parameters": {
             "type": "object",
             "properties": {
-                "program": {
+                "command": {
                     "type": "string",
-                    "description": "Program to execute, e.g. 'python', 'uv', or 'git'.",
-                },
-                "args": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "Program arguments. Do not include the program name.",
-                    "default": [],
+                    "description": "Shell command to run, e.g. 'uv add pytest' or 'python -m pytest tests/ -q'.",
                 },
                 "cwd": {
                     "type": "string",
@@ -35,11 +33,11 @@ TOOL_SCHEMAS = [
                 },
                 "timeout_seconds": {
                     "type": "integer",
-                    "description": "Maximum time to wait before stopping the program.",
+                    "description": "Maximum time to wait before stopping the command.",
                     "default": DEFAULT_EXECUTION_TIMEOUT_SECONDS,
                 },
             },
-            "required": ["program"],
+            "required": ["command"],
             "additionalProperties": False,
         },
     }
@@ -65,12 +63,11 @@ def resolve_workspace_path(path):
     return target
 
 
-@tool("execute_program")
-def execute_program(program, args=None, cwd=".", timeout_seconds=DEFAULT_EXECUTION_TIMEOUT_SECONDS):
-    if not isinstance(program, str) or not program:
-        raise ValueError("program must be a non-empty string")
+@tool("bash")
+def bash(command, cwd=".", timeout_seconds=DEFAULT_EXECUTION_TIMEOUT_SECONDS):
+    if not isinstance(command, str) or not command.strip():
+        raise ValueError("command must be a non-empty string")
 
-    args = validate_args(args or [])
     target_cwd = resolve_workspace_path(cwd)
     if not target_cwd.exists():
         raise FileNotFoundError(f"No such working directory: {cwd}")
@@ -78,11 +75,10 @@ def execute_program(program, args=None, cwd=".", timeout_seconds=DEFAULT_EXECUTI
         raise NotADirectoryError(f"Not a directory: {cwd}")
 
     timeout = max(1, min(int(timeout_seconds), MAX_EXECUTION_TIMEOUT_SECONDS))
-    command = [program] + args
 
     try:
         completed = subprocess.run(
-            command,
+            ["bash", "-c", command],
             cwd=target_cwd,
             text=True,
             stdout=subprocess.PIPE,
@@ -111,18 +107,6 @@ def execute_program(program, args=None, cwd=".", timeout_seconds=DEFAULT_EXECUTI
         ensure_ascii=False,
         indent=2,
     )
-
-
-def validate_args(args):
-    if not isinstance(args, list):
-        raise ValueError("args must be a list")
-
-    validated = []
-    for arg in args:
-        if not isinstance(arg, str):
-            raise ValueError("each arg must be a string")
-        validated.append(arg)
-    return validated
 
 
 def truncate_output(output):

@@ -3,7 +3,7 @@
   "status": "ok",
   "repo": "networkx/networkx",
   "base_commit": "8e9a163b44f67502290cfa690c6e42ff43ce3593",
-  "problem_statement": "API: add centroid as alias to barycenter in `distance_measures`\n\nThere has been lot's of movement/followup related to center/centroid and their implementations for trees - see #8221 for the wider discussion.\n\nThis issue isolates one sub-issue from that discussion. Quoting @dschult :\n\n> **Centroid vs Barycenter**\n> I've looked into this a little, and my impressions include: \n> 1) that the Barycenter of a graph is a subgraph, not a set of nodes. But our function returns a set of nodes. \n> 2) It looks like barycenter, centroid, and median (or maybe weighted median which seems like a self-contradiction to me) all refer to the same concept. \n> 3) The term `centroid` seems to have the most links and connected ideas, other than in networkx. \n> These impressions are somewhat subjective, so happy to be corrected or nudged to different perspectives. On an even more speculative level, it seems to me that \"barycenter\" and \"median\" have a harder time connecting to other literature -- and spend more time explaining what they mean, often without a clear definition (especially \"barycenter\"). The centroid literature seems more extensive and connected.\n\nWith the following proposal:\n\n> I propose that we use the name \"centroid\" in ... `distance_measures.py`. But, we should keep `nx.barycenter` as an alias to centroid, and use all three names in the docs.",
+  "problem_statement": "Make `nx.barycenter` an alias of `nx.centroid`\n\nIn `networkx.algorithms.distance_measures`, `centroid` is the primary name for the graph centroid/barycenter function. Keep backward compatibility:\n\n- `nx.barycenter` must be the **same function object** as `nx.centroid` (e.g. `barycenter = centroid`, not a wrapper).\n- Update doc cross-references to prefer `centroid` over `barycenter`.",
   "test_files": [
     "networkx/algorithms/tests/test_distance_measures.py"
   ],
@@ -583,5 +583,7 @@
     "networkx/algorithms/tests/test_distance_measures.py::TestWeightedDistance::test_radius_weight_fn",
     "networkx/algorithms/tests/test_distance_measures.py::test__extrema_bounding_invalid_compute_kwarg"
   ],
-  "hard": false
+  "hard": false,
+  "task_kind": "feature",
+  "problem_statement_source": "rewritten"
 }

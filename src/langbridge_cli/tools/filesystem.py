@@ -204,7 +204,7 @@ def _rg_binary():
     if not rg:
         raise RuntimeError(
             "ripgrep (rg) is required for grep/glob tools but was not found on PATH. "
-            "Install ripgrep or use execute_program."
+            "Install ripgrep or use bash."
         )
     return rg
 

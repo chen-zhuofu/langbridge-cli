@@ -1,9 +1,10 @@
 # Langbridge-bench — self-built benchmark from GitHub PRs
 
 Turns real, merged GitHub pull requests into training/eval tasks in the
-**SWE-bench schema** (same fields as public SWE-bench). Each task is one bug fix:
-the agent gets the issue text and the repo at the commit *before* the fix; hidden
-tests decide if the patch is correct.
+**SWE-bench schema** (same fields as public SWE-bench). Each task is a real PR fix:
+the agent gets a problem statement and the repo at the commit *before* the fix;
+hidden tests decide if the patch is correct. Tasks include **bug fixes** and
+**feature implementations** (`task_kind: "feature"` in specs).
 
 Pair with **`evals/swe-bench/`** (public HuggingFace SWE-bench for e2e L4 eval).
 
@@ -13,18 +14,60 @@ Pair with **`evals/swe-bench/`** (public HuggingFace SWE-bench for e2e L4 eval).
 langbridge-bench/
   instances/<task_id>.json   # raw validated instance (SWE-bench schema)
   specs/<task_id>.json       # eval-ready spec (what training runners load)
+  excluded.json              # tasks filtered out (vague / not bug-fix)
+  instances/excluded/        # archived instances (status=excluded)
+  specs/excluded/              # archived specs (not loaded by eval)
   out/                       # pipeline scratch jsonl + logs (gitignored)
   collect_prs.py             # stage 1: mine PRs from GitHub
   reference_test.py          # stages 2–4: validate with pytest F2P/P2P
   materialize.py             # jsonl → instances/*.json + specs/*.json
 ```
 
-Training eval/train reads **`specs/`** by default:
+Training eval/train reads **`specs/`** by default (**27 active** tasks — see
+`excluded.json`):
 
 ```bash
 uv run python -m langbridge_cli.training.cli eval --role l3 --limit 5
 # same as --source langbridge-bench (swebench is a backward-compat alias)
 ```
+
+### Task mix (27 active)
+
+| kind | count | notes |
+| --- | --- | --- |
+| bug fix | 20 | raw GitHub issue text as `problem_statement` |
+| feature | 7 | rewritten `problem_statement` (`task_kind: "feature"`) |
+
+Feature tasks use actionable requirements derived from the hidden tests, not the
+original vague GitHub issue. Rewrites live in
+`rewrite_feature_statements.py`; re-apply with:
+
+```bash
+uv run python evals/langbridge-bench/rewrite_feature_statements.py
+```
+
+| task_id | feature summary |
+| --- | --- |
+| `tqdm__tqdm-1130` | `delay` param — hide bar for fast loops |
+| `tqdm__tqdm-1493` | typed `envwrap` for env-var overrides |
+| `networkx__networkx-8630` | `barycenter` alias of `centroid` |
+| `networkx__networkx-8591` | `bipartite.butterflies()` counting |
+| `pallets__click-3473` | `help` on `Argument` + help page section |
+| `pytest-dev__pytest-14568` | public `pytest.register_fixture()` |
+| `pytest-dev__pytest-14576` | assert diff for `dict.items()` `>=` / `<=` |
+
+### Still excluded (3)
+
+Archived under `specs/excluded/` — not loaded by eval (`ok_only=True`; subdirs
+not scanned).
+
+| task_id | reason |
+| --- | --- |
+| `python-websockets__websockets-1543` | documentation gap, not a code bug |
+| `sympy__sympy-23082` | vague ("maybe diff should…") |
+| `pygments__pygments-3090` | duplicate of `pygments-3078` |
+
+Full manifest: `excluded.json`.
 
 ### Parallel Docker eval (recommended for throughput)
 

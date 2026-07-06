@@ -25,5 +25,7 @@
     1234,
     23078
   ],
-  "_num_files": 2
+  "_num_files": 2,
+  "status": "excluded",
+  "exclude_reason": "vague problem statement ('maybe diff should...')"
 }

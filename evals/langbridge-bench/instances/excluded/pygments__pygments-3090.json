@@ -36,5 +36,7 @@
   "_linked_issues": [
     3076
   ],
-  "_num_files": 2
+  "_num_files": 2,
+  "status": "excluded",
+  "exclude_reason": "duplicate of pygments-3078 (same issue text)"
 }

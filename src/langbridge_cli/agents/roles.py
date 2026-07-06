@@ -70,7 +70,7 @@ Do roughly one subtask per round, then update the todo_list before you finish.
 
 When every subtask (including the e2e test) is DONE, do a final hand-debug pass.
 If the deliverable is runnable, bring it up and exercise it yourself with the
-execute_program tool, then run the e2e test once more to verify the whole task.
+bash tool, then run the e2e test once more to verify the whole task.
 You still do not write code. If you find a bug, add a new subtask to the
 todo_list with update_plan so L4 can fix it next round.
 

@@ -1,30 +1,4 @@
-import os
-
-from langbridge_cli.settings import DEFAULT_MODEL, load_api_key
-
-
 TOOL_SCHEMAS = [
-    {
-        "type": "function",
-        "name": "ask_l3_test_engineer",
-        "description": "Ask the L3 test engineer agent to inspect test quality and run relevant tests.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "task": {
-                    "type": "string",
-                    "description": "The behavior, feature, or test change the L3 test engineer should verify.",
-                },
-                "context": {
-                    "type": "string",
-                    "description": "Relevant implementation details, files, or concerns from the lead agent.",
-                    "default": "",
-                },
-            },
-            "required": ["task"],
-            "additionalProperties": False,
-        },
-    },
     {
         "type": "function",
         "name": "ask_l4_engineer",
@@ -93,25 +67,6 @@ def tool(name):
     return register
 
 
-@tool("ask_l3_test_engineer")
-def ask_l3_test_engineer(task, context="", api_key=None, model=None, trace_sink=None, run_log_path=None, turn_id=None):
-    from langbridge_cli.agents.multi_agent import run_l3_test_engineer
-
-    api_key = api_key or load_api_key()
-    model = model or os.environ.get("LANGBRIDGE_MODEL", DEFAULT_MODEL)
-    if trace_sink is None and run_log_path is None:
-        return run_l3_test_engineer(api_key, model, task, context)
-    return run_l3_test_engineer(
-        api_key,
-        model,
-        task,
-        context,
-        trace_sink=trace_sink,
-        run_log_path=run_log_path,
-        turn_id=turn_id,
-    )
-
-
 @tool("ask_l4_engineer")
 def ask_l4_engineer(task, context="", feedback=""):
     # The living L4<->L3 review loop runs in the PM runtime; run_tool_call dispatches
@@ -124,5 +79,3 @@ def ask_l5_engineer(task, context="", feedback=""):
     # The L5 component Ralph loop runs in the PM runtime; run_tool_call dispatches
     # to agent.run_l5_component and overrides this placeholder output.
     return ""
-
-

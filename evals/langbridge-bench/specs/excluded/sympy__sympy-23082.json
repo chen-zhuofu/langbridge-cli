@@ -1,6 +1,6 @@
 {
   "task_id": "sympy__sympy-23082",
-  "status": "ok",
+  "status": "excluded",
   "repo": "sympy/sympy",
   "base_commit": "cdcba0571a2ebd3ac65b614b5dcad3134280ebae",
   "problem_statement": "sympy.physics.vector.vector.Vector.diff() seems to produce unnecessarily long derivatives\n\nI noticed this when working on this arbitrary example:\r\n\r\n```python\r\nimport sympy as sm\r\nimport sympy.physics.mechanics as me\r\na, b, c, d, e, f = sm.symbols('a, b, c, d, e, f')\r\nalpha, beta = sm.symbols('alpha, beta')\r\n\r\nA = me.ReferenceFrame('A')\r\nB = me.ReferenceFrame('B')\r\nC = me.ReferenceFrame('C')\r\n\r\nB.orient_axis(A, alpha, A.x)\r\nC.orient_axis(B, beta, B.y)\r\n\r\nv = a*A.x + b*A.y + c*B.x + d*B.y + e*C.x + f*C.y\r\n```\r\n\r\n```python\r\n>>> v.diff(alpha, A)\r\nv.diff(alpha, A)\r\n(d*sin(alpha)**2 + d*cos(alpha)**2)*B.z + (-(e*sin(alpha)*sin(beta) + f*cos(alpha))*sin(beta)*cos(alpha) + (e*sin(beta)*cos(alpha) - f*sin(alpha))*sin(alpha)*sin(beta))*C.x + ((e*sin(alpha)*sin(beta) + f*cos(alpha))*sin(alpha) + (e*sin(beta)*cos(alpha) - f*sin(alpha))*cos(alpha))*C.y + ((e*sin(alpha)*sin(beta) + f*cos(alpha))*cos(alpha)*cos(beta) - (e*sin(beta)*cos(alpha) - f*sin(alpha))*sin(alpha)*cos(beta))*C.z\r\n```\r\n\r\n```pycon\r\n>>> v.diff(alpha, A).simplify()\r\nd*B.z - f*sin(beta)*C.x + e*sin(beta)*C.y + f*cos(beta)*C.z\r\n```\r\n\r\n```pycon\r\n>>> v.express(A).diff(alpha, A)\r\n(-d*sin(alpha) + e*sin(beta)*cos(alpha) - f*sin(alpha))*A.y + (d*cos(alpha) + e*sin(alpha)*sin(beta) + f*cos(alpha))*A.z\r\n```\r\n\r\nI guess in the first case it tries to compute the product rule for each component. I'm not sure if expressing in the frame would always result in simpler equations in all cases. If so, then maybe that's what `.diff()` should do.",
@@ -20,5 +20,6 @@
     "sympy/physics/vector/tests/test_vector.py::test_vector_var_in_dcm",
     "sympy/physics/vector/tests/test_vector.py::test_vector_xreplace"
   ],
-  "hard": false
+  "hard": false,
+  "exclude_reason": "vague problem statement ('maybe diff should...')"
 }

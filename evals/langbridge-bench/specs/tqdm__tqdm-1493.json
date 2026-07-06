@@ -3,7 +3,7 @@
   "status": "ok",
   "repo": "tqdm/tqdm",
   "base_commit": "d69cc908d8dcfcad792b803c0bb3fa67d626918d",
-  "problem_statement": "How to use tqdm to log progress bars in cloudwatch logs?\n\nI want to log progress of my API in cloudwatch. Is it possible to do the same?\n\n---\n\nNative support with cloud logging\n\nI would like to make tqdm works when executed in a cloud env where logs are propagated as text to external services. I am mostly talking about Kubernetes here, but I guess it also apply to any other container orchestration tool.\r\n\r\nConsider this simple snippet using tqdm 4.64:\r\n\r\n```python\r\nimport sys\r\nfrom tqdm import tqdm\r\nfrom time import sleep\r\n\r\nfor i in tqdm(range(10)):\r\n    sleep(5)\r\n    sys.stderr.write(\"\\n\")\r\n```\r\n\r\nWhen removing `sys.stderr.write(\"\\n\")` then the tqdm progress bar only display at the very end of the loop in one shot to 100%. It obviously defeats the purpose of the progress bar.\r\n\r\nAdding `sys.stderr.write(\"\\n\")` trigger a log flush (or propagation) to wherever the logs are sent (Kubernetes console for example) and so the progress bar is displayed at regular interval.\r\n\r\nThis simple snippet is actually a workaround to make tqdm works with Kubernetes, but it does not reflect the complexity of a given stack where things like progress bar can be deeply nested into the codebase and so not \"tunable\" when executing a workload.\r\n\r\nI have two questions here:\r\n\r\n- Is there is actually another more \"automatic\" workaround than `sys.stderr.write(\"\\n\")`?\r\n- Would you be willing to add to `tqdm(range(10), ...)` a new arg that can trigger this `sys.stderr.write(\"\\n\")` whenever the bar must be updated? We could eventually imagine auto-detecting (if possible) Kubernetes or simply setting a boolean flag.\r\n  - _On this it seems important to me to add a new tqdm arg instead of a more complex solution since in a deeply nested codebase, tqdm args is often the only thing you have control on. Auto-detection would be even better, if that something easily doable (I can dig into this if needed)._",
+  "problem_statement": "Improve tqdm's `envwrap` decorator for typed environment-variable overrides\n\nRefactor `tqdm.utils.envwrap` so environment variables can override function parameters with correct types.\n\nRequirements:\n1. Replace the old `literal_eval` and `case_sensitive` kwargs with a `types` dict mapping parameter names to coercion callables (e.g. `int`, `ast.literal_eval`). Use `types[name](value)` when inference fails.\n2. When the wrapped function has type annotations, try each annotation type (including `Union` members via `__args__`) to coerce env var strings.\n3. When there is no annotation, coerce using the type of the parameter's default value.\n4. Ignore env vars that do not match a function parameter name.\n5. Update `@envwrap(\"TQDM_\")` on `tqdm.__init__` to pass explicit `types` for `total` (float), `ncols`, `miniters` (float), `position`, and `nrows` (int).\n\nTests exercise `@envwrap(\"FUNC_\", types=defaultdict(lambda: literal_eval))` and annotation-based coercion.",
   "test_files": [
     "tests/tests_asyncio.py",
     "tests/tests_utils.py"
@@ -17,5 +17,7 @@
   "pass_to_pass": [
     "tests/tests_utils.py::test_envwrap"
   ],
-  "hard": true
+  "hard": true,
+  "task_kind": "feature",
+  "problem_statement_source": "rewritten"
 }

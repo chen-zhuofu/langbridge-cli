@@ -3,7 +3,7 @@ import json
 import pytest
 
 from langbridge_cli.tools import TOOL_SCHEMAS, TOOLS
-from langbridge_cli.tools.filesystem import delete_file, glob, grep
+from langbridge_cli.tools.filesystem import delete_file, glob, grep, read_file
 
 
 def test_grep_and_glob_are_registered():
@@ -58,3 +58,39 @@ def test_delete_file_rejects_directories(tmp_path, monkeypatch):
 
     with pytest.raises(IsADirectoryError, match="Not a file"):
         delete_file("folder")
+
+
+def test_read_file_line_range(tmp_path, monkeypatch):
+    monkeypatch.setattr("langbridge_cli.tools.filesystem.WORKSPACE_ROOT", tmp_path)
+    (tmp_path / "sample.py").write_text("line1\nline2\nline3\nline4\n", encoding="utf-8")
+
+    output = read_file("sample.py", start_line=2, end_line=3)
+
+    assert "# sample.py lines 2-3 (4 lines total)" in output
+    assert "2| line2" in output
+    assert "3| line3" in output
+    assert "line4" not in output
+
+
+def test_read_file_by_function_name(tmp_path, monkeypatch):
+    monkeypatch.setattr("langbridge_cli.tools.filesystem.WORKSPACE_ROOT", tmp_path)
+    (tmp_path / "sample.py").write_text(
+        "def helper():\n    return 1\n\ndef target():\n    x = 2\n    return x\n",
+        encoding="utf-8",
+    )
+
+    output = read_file("sample.py", function_name="target")
+
+    assert "function `target`" in output
+    assert "def target():" in output
+    assert "return x" in output
+    assert "def helper" not in output
+
+
+def test_read_file_rejects_function_and_line_range(tmp_path, monkeypatch):
+    monkeypatch.setattr("langbridge_cli.tools.filesystem.WORKSPACE_ROOT", tmp_path)
+    (tmp_path / "sample.py").write_text("def target():\n    pass\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="not both"):
+        read_file("sample.py", function_name="target", start_line=1)
+

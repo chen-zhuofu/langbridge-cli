@@ -1,6 +1,6 @@
 {
   "task_id": "python-websockets__websockets-1543",
-  "status": "ok",
+  "status": "excluded",
   "repo": "python-websockets/websockets",
   "base_commit": "9a2f39fc66fd2427f904e551b1cc5f3995b02217",
   "problem_statement": "Implementation upgrade document does not mention `connection.close_code`\n\nIt seems that the [Attributes of connection objects](https://websockets.readthedocs.io/en/latest/howto/upgrade.html#attributes-of-connection-objects) chapter (or does it belong elsewhere in the document?) does not explain how to deal with the `close_code` and `close_reason` attributes that were previously available on the connection.\r\n\r\nI skimmed through the docs, and it seems that `.protocol.close_code` is what I need, but it would be nice to mention in it the upgrade document too. Or maybe there's a better way to deal with this altogether?",
@@ -431,5 +431,6 @@
     "tests/sync/test_connection.py::ServerConnectionTests::test_writing_in_recv_events_fails",
     "tests/sync/test_connection.py::ServerConnectionTests::test_writing_in_send_context_fails"
   ],
-  "hard": true
+  "hard": true,
+  "exclude_reason": "documentation gap, not a code bug fix"
 }

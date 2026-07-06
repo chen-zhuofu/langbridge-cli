@@ -434,5 +434,7 @@
   "_linked_issues": [
     1537
   ],
-  "_num_files": 11
+  "_num_files": 11,
+  "status": "excluded",
+  "exclude_reason": "documentation gap, not a code bug fix"
 }

@@ -3,7 +3,7 @@
   "status": "ok",
   "repo": "pallets/click",
   "base_commit": "1a994adbb114d402275a614942e2f838a654e648",
-  "problem_statement": "Add `help` to argument parameter\n\nWe are now open to a PR for adding a help kwarg to arguments in the same way that there is for options and adjusting the help pages to account for this. \n\n[Help Pages](https://click.palletsprojects.com/en/stable/documentation/#help-pages)\n\n\n```\n@click.command()\n@click.argument('name', help='The name to print')\n@click.option('--count', default=1, help='number of greetings')\ndef hello(name: str, count: int):\n    \"\"\"This script prints hello and a name one or more times.\"\"\"\n    for x in range(count):\n        if name:\n            click.echo(f\"Hello {name}!\")\n        else:\n            click.echo(\"Hello!\")\n```",
+  "problem_statement": "Add `help` parameter to `click.Argument`\n\nImplement optional `help` on positional arguments, similar to options.\n\nRequirements:\n1. `--help` shows a **\"Positional arguments:\"** section before **\"Options:\"** when any argument has help text.\n2. Omit the positional section when no arguments define help.\n3. Optional arguments display metavar as `[NAME]`.\n4. Deprecated arguments append a deprecation label: `(DEPRECATED)` or `(DEPRECATED: message)`. When help is empty or `None`, show only the label with no leading space.\n5. `Argument.to_info_dict()` includes a `help` field (apply `inspect.cleandoc` to multi-line help).\n6. `Command.to_info_dict()` exposes argument help in its `params` list.",
   "test_files": [
     "tests/test_arguments.py",
     "tests/test_info_dict.py"
@@ -103,5 +103,7 @@
     "tests/test_info_dict.py::test_parameter[Option]",
     "tests/test_info_dict.py::test_paramtype_no_name"
   ],
-  "hard": true
+  "hard": true,
+  "task_kind": "feature",
+  "problem_statement_source": "rewritten"
 }

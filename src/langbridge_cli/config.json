@@ -51,11 +51,6 @@
       "default_timeout_seconds": 60,
       "max_timeout_seconds": 300
     },
-    "packages": {
-      "max_output_chars": 20000,
-      "default_timeout_seconds": 300,
-      "max_timeout_seconds": 1200
-    },
     "web": {
       "default_timeout_seconds": 30,
       "max_timeout_seconds": 120,
