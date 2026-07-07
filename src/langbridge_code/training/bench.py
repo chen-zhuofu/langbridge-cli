@@ -16,7 +16,7 @@ A spec (one JSON per task, cached under the specs dir) holds:
     "fail_to_pass": [nodeid, ...], # tests that pass only once the bug is fixed
     "pass_to_pass": [nodeid, ...], # pre-existing tests that must keep passing
     "status": "ok",
-    "hard": bool                   # route to L5 in the PM/L5 evals
+    "hard": bool                   # optional flag on a spec
   }
 
 grade_diff(spec, candidate_code_diff, repo) applies the hidden golden tests + the

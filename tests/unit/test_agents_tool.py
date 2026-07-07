@@ -1,6 +1,6 @@
-from langbridge_code.agents.agent import pm_should_continue, run_l4_component
+from langbridge_code.agents.agent import run_coder_component
 from langbridge_code.agents.multi_agent import (
-    L4_TOOL_SCHEMAS,
+    CODER_TOOL_SCHEMAS,
     max_steps_report,
     reviewer_review_passed,
     run_specialist_agent,
@@ -9,33 +9,25 @@ from langbridge_code.agents.multi_agent import (
 from langbridge_code.agents.roles import (
     CHAT_SYSTEM_PROMPT,
     CODER_ENGINEER_PROMPT,
-    L3_TEST_ENGINEER_PROMPT,
-    L4_ENGINEER_PROMPT,
+    REVIEWER_ENGINEER_PROMPT,
     SYSTEM_PROMPT,
 )
 from langbridge_code.tools import MAIN_TOOL_SCHEMAS, MAIN_TOOLS, TOOLS
-
-
-def test_workflow_does_not_continue_after_one_turn():
-    assert not pm_should_continue("subtasks remain\nBUG_STATUS: OPEN")
-    assert not pm_should_continue("all done\nBUG_STATUS: NONE")
 
 
 def test_chat_system_prompt():
     assert SYSTEM_PROMPT == CHAT_SYSTEM_PROMPT
     assert "LangBridge Code" in SYSTEM_PROMPT
     assert "Do not reveal" in SYSTEM_PROMPT
-    assert "BUG_STATUS" not in SYSTEM_PROMPT
 
 
 def test_engineering_guidelines_live_in_specialist_prompts():
-    assert "Think before coding." not in CODER_ENGINEER_PROMPT  # slim workflow prompt
+    assert "Think before coding." not in CODER_ENGINEER_PROMPT
     assert "CODER_STATUS: READY_FOR_REVIEW" in CODER_ENGINEER_PROMPT
-    assert "REVIEW_VERDICT: PASS" in L3_TEST_ENGINEER_PROMPT
-    assert L4_ENGINEER_PROMPT == CODER_ENGINEER_PROMPT
+    assert "REVIEW_VERDICT: PASS" in REVIEWER_ENGINEER_PROMPT
 
 
-def test_main_tools_exclude_legacy_pm_specialists():
+def test_main_tools_exclude_legacy_specialists():
     assert "ask_l4_engineer" not in TOOLS
     assert "ask_l5_engineer" not in TOOLS
     assert set(MAIN_TOOLS) == {
@@ -56,8 +48,8 @@ def test_main_tools_exclude_legacy_pm_specialists():
         "read_webpage",
         "update_plan",
     ]
-    assert any(schema["name"] == "delete_file" for schema in L4_TOOL_SCHEMAS)
-    for schema in MAIN_TOOL_SCHEMAS + L4_TOOL_SCHEMAS:
+    assert any(schema["name"] == "delete_file" for schema in CODER_TOOL_SCHEMAS)
+    for schema in MAIN_TOOL_SCHEMAS + CODER_TOOL_SCHEMAS:
         assert "purpose" in schema["parameters"]["properties"]
         assert "purpose" in schema["parameters"]["required"]
 
@@ -69,7 +61,7 @@ def test_reviewer_passed_requires_pass_verdict():
 
 
 def test_coder_write_tool_requires_approval(monkeypatch):
-    monkeypatch.setattr("langbridge_code.agents.multi_agent.approve_l4_write_tool", lambda name, arguments: False)
+    monkeypatch.setattr("langbridge_code.agents.multi_agent.approve_coder_write_tool", lambda name, arguments: False)
 
     result = run_specialist_tool_call(
         {
@@ -90,7 +82,7 @@ def test_coder_write_tool_requires_approval(monkeypatch):
 
 
 def test_coder_write_tool_runs_after_approval(monkeypatch):
-    monkeypatch.setattr("langbridge_code.agents.multi_agent.approve_l4_write_tool", lambda name, arguments: True)
+    monkeypatch.setattr("langbridge_code.agents.multi_agent.approve_coder_write_tool", lambda name, arguments: True)
 
     result = run_specialist_tool_call(
         {
@@ -111,7 +103,7 @@ def test_coder_write_tool_runs_after_approval(monkeypatch):
 
 
 def test_specialist_tool_strips_purpose_before_execution(monkeypatch):
-    monkeypatch.setattr("langbridge_code.agents.multi_agent.approve_l4_write_tool", lambda name, arguments: True)
+    monkeypatch.setattr("langbridge_code.agents.multi_agent.approve_coder_write_tool", lambda name, arguments: True)
 
     result = run_specialist_tool_call(
         {
@@ -150,13 +142,13 @@ def test_coder_write_tool_uses_approval_callback():
     assert result["output"] == "created x.py"
 
 
-def test_run_l4_component_delegates_to_coder_reviewer(monkeypatch):
+def test_run_coder_component_delegates_to_coder_reviewer(monkeypatch):
     monkeypatch.setattr(
         "langbridge_code.agents.agent.run_coder_reviewer_loop",
         lambda *args, **kwargs: (True, "CODER_STATUS: READY_FOR_REVIEW\nSummary: done"),
     )
 
-    output = run_l4_component("key", "model", {"task": "implement calculator", "context": "repo context"})
+    output = run_coder_component("key", "model", {"task": "implement calculator", "context": "repo context"})
 
     assert "WORKFLOW_REVIEW_STATUS: OK" in output
     assert "READY_FOR_REVIEW" in output
@@ -200,7 +192,7 @@ def test_specialist_max_steps_fallback_reports_tool_history(monkeypatch):
 
     monkeypatch.setattr("langbridge_code.agents.multi_agent.MAX_SPECIALIST_AGENT_STEPS", 1)
     monkeypatch.setattr("langbridge_code.agents.multi_agent.create_specialist_response", fake_response)
-    monkeypatch.setattr("langbridge_code.agents.multi_agent.approve_l4_write_tool", lambda name, arguments: True)
+    monkeypatch.setattr("langbridge_code.agents.multi_agent.approve_coder_write_tool", lambda name, arguments: True)
 
     report = run_specialist_agent(
         "key",

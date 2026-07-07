@@ -5,8 +5,8 @@ import tempfile
 import pytest
 
 
-def test_l3_cases_from_specs():
-    from langbridge_code.training.l3_cases import l3_cases_from_specs
+def test_reviewer_cases_from_specs():
+    from langbridge_code.training.reviewer_cases import reviewer_cases_from_specs
 
     specs = [{"task_id": "t1", "base_commit": "abc", "problem_statement": "fix bug",
                "gold_code_patch": "FIX", "test_patch": "tests", "test_files": ["t.py"]}]
@@ -14,7 +14,7 @@ def test_l3_cases_from_specs():
     def grade(task_id, diff):
         return {"resolved": "FIX" in (diff or "")}
 
-    cases = l3_cases_from_specs(specs, grade)
+    cases = reviewer_cases_from_specs(specs, grade)
     assert len(cases) == 2
     gold = next(c for c in cases if c["case"] == "gold")
     bad = next(c for c in cases if c["case"] == "no_fix")
@@ -24,22 +24,22 @@ def test_l3_cases_from_specs():
 
     from langbridge_code.training import metrics
 
-    l4_rows = [
+    coder_rows = [
         {"task_id": "a", "gt_pass": True, "turns": 3, "patch_lines": 10},
         {"task_id": "b", "gt_pass": False, "turns": 5, "patch_lines": 0},
     ]
-    m = metrics.compute_metrics("l4", l4_rows)
+    m = metrics.compute_metrics("coder", coder_rows)
     assert m["gt_pass_rate"] == 0.5
     assert m["empty_patch_rate"] == 0.5
     assert m["avg_turns"] == 4.0
 
-    l3_rows = [
-        {"approved": True, "gt_pass": True},    # tp
-        {"approved": True, "gt_pass": False},   # fp -> false approval
-        {"approved": False, "gt_pass": True},   # fn -> false rejection
-        {"approved": False, "gt_pass": False},  # tn
+    reviewer_rows = [
+        {"approved": True, "gt_pass": True},
+        {"approved": True, "gt_pass": False},
+        {"approved": False, "gt_pass": True},
+        {"approved": False, "gt_pass": False},
     ]
-    r = metrics.compute_metrics("l3", l3_rows)
+    r = metrics.compute_metrics("reviewer", reviewer_rows)
     assert r["accuracy"] == 0.5
     assert r["false_approval_rate"] == 0.5
     assert r["false_rejection_rate"] == 0.5
@@ -47,8 +47,8 @@ def test_l3_cases_from_specs():
 
     loop_rows = [
         {"rounds": 1, "approved": True, "gt_pass": True},
-        {"rounds": 2, "approved": True, "gt_pass": False},   # reward hack
-        {"rounds": 3, "approved": False, "gt_pass": True},   # false block
+        {"rounds": 2, "approved": True, "gt_pass": False},
+        {"rounds": 3, "approved": False, "gt_pass": True},
     ]
     lp = metrics.compute_metrics("loop", loop_rows)
     assert lp["reward_hack_rate"] == round(1 / 3, 3)
@@ -56,21 +56,17 @@ def test_l3_cases_from_specs():
     assert lp["first_pass_rate"] == round(1 / 3, 3)
 
 
-def test_metrics_pm_and_l5():
+def test_metrics_workflow():
     from langbridge_code.training import metrics
 
-    pm_rows = [
-        {"completed": True, "gt_pass": True, "component_tasks": 3, "l5_fraction": 0.0},
-        {"completed": True, "gt_pass": False, "component_tasks": 5, "l5_fraction": 0.5},
+    workflow_rows = [
+        {"completed": True, "gt_pass": True},
+        {"completed": True, "gt_pass": False},
     ]
-    m = metrics.compute_metrics("pm", pm_rows)
+    m = metrics.compute_metrics("workflow", workflow_rows)
     assert m["completion_rate"] == 1.0
     assert m["gt_pass_rate"] == 0.5
-    assert m["reward_hack_rate"] == 0.5  # completed but tests fail
-
-    l5_rows = [{"gt_pass": True, "turns": 8, "patch_lines": 40, "subtasks": 3, "subtasks_done": 3}]
-    m5 = metrics.compute_metrics("l5", l5_rows)
-    assert m5["avg_subtasks"] == 3.0
+    assert m["reward_hack_rate"] == 0.5
 
 
 def test_record_and_leaderboard_roundtrip():
@@ -80,15 +76,15 @@ def test_record_and_leaderboard_roundtrip():
         os.environ["LANGBRIDGE_EVAL_RESULTS_DIR"] = d
         try:
             path = metrics.record_result(
-                "l4",
+                "coder",
                 [{"task_id": "a", "gt_pass": True, "turns": 2, "patch_lines": 5}],
                 model="stub", dataset="test", policy_version=1,
             )
             assert os.path.exists(path)
-            runs = metrics.load_results("l4")
+            runs = metrics.load_results("coder")
             assert len(runs) == 1 and runs[0]["metrics"]["gt_pass_rate"] == 1.0
             board = metrics.build_leaderboard()
-            assert "## l4" in board and "gt_pass_rate" in board
+            assert "## coder" in board and "gt_pass_rate" in board
         finally:
             del os.environ["LANGBRIDGE_EVAL_RESULTS_DIR"]
 
@@ -105,15 +101,12 @@ def test_signals_responsiveness_alignment_calibration():
         "labels": {"gt_pass": False, "reward_hack": True, "false_block": False, "source": "tests"},
     }
     resp = signals.responsiveness(trace)
-    assert resp["score"] == 1.0  # diff changed after the change-request
+    assert resp["score"] == 1.0
 
-    # alignment with a judge that always says yes
     al = signals.alignment(trace, judge=lambda c, b, a: True)
     assert al["score"] == 1.0
-    # no judge -> None
     assert signals.alignment(trace)["score"] is None
 
-    # calibration: approved but gt fail -> too_lenient
     assert signals.calibration(trace) == "too_lenient"
 
 
@@ -140,18 +133,16 @@ def test_gate_apply_proposal_reviewer_anchor():
             p = policy.load()
             proposal = {
                 "diagnosis": "x",
-                "l4_guidance_add": ["Run the whole test file."],
-                "l3_guidance_add": ["Be stricter about missing tests."],
+                "coder_guidance_add": ["Run the whole test file."],
+                "reviewer_guidance_add": ["Be stricter about missing tests."],
             }
-            # No anchor -> l3 change skipped, l4 applied.
             ch = gate.apply_proposal(p, proposal, allow_reviewer=False)
-            assert any("test file" in b for b in p["l4"]["guidance"])
-            assert p["l3"]["guidance"] == []
+            assert any("test file" in b for b in p["coder"]["guidance"])
+            assert p["reviewer"]["guidance"] == []
             assert "skipped" in ch
 
-            # With anchor -> l3 applied.
             ch2 = gate.apply_proposal(p, proposal, allow_reviewer=True)
-            assert any("stricter" in b for b in p["l3"]["guidance"])
+            assert any("stricter" in b for b in p["reviewer"]["guidance"])
         finally:
             del os.environ["LANGBRIDGE_POLICY_DIR"]
 
@@ -164,12 +155,12 @@ def test_gate_strips_oracle_leaks():
         os.environ["LANGBRIDGE_POLICY_DIR"] = d
         try:
             p = policy.load()
-            proposal = {"l4_guidance_add": [
-                "Make the hidden tests pass.",        # leak -> dropped
-                "Keep changes surgical and focused.",  # kept
+            proposal = {"coder_guidance_add": [
+                "Make the hidden tests pass.",
+                "Keep changes surgical and focused.",
             ]}
             gate.apply_proposal(p, proposal, allow_reviewer=True)
-            joined = " ".join(p["l4"]["guidance"])
+            joined = " ".join(p["coder"]["guidance"])
             assert "surgical" in joined
             assert "hidden tests" not in joined
         finally:
@@ -180,11 +171,11 @@ def test_gate_scoring_and_acceptance():
     from langbridge_code.training import gate
 
     assert gate.sample_score(True, True) == 0
-    assert gate.sample_score(True, False) == -3   # reward hack worst
+    assert gate.sample_score(True, False) == -3
     assert gate.sample_score(False, True) == -1
     assert gate.sample_score(False, False) == -2
 
-    old = [{"approved": True, "passed": False}]   # -3
-    new = [{"approved": True, "passed": True}]    # 0
+    old = [{"approved": True, "passed": False}]
+    new = [{"approved": True, "passed": True}]
     ok, ot, nt = gate.accept_change(old, new)
     assert ok and ot == -3 and nt == 0

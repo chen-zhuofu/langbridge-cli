@@ -9,13 +9,8 @@ from langbridge_code.settings import (
 )
 from langbridge_code.llm.parse import extract_output_text, print_step_trace
 from langbridge_code.agents.roles import (
-    CODER_ENGINEER_PROMPT,
-    REVIEWER_ENGINEER_PROMPT,
     coder_system_prompt,
     reviewer_system_prompt,
-    l3_system_prompt,
-    l4_system_prompt,
-    l5_system_prompt,
 )
 from langbridge_code.skills import skill_catalog_text
 from langbridge_code import policy
@@ -33,17 +28,21 @@ from langbridge_code.agents import control
 from langbridge_code.persistence.context import compact_messages_if_needed
 
 
-L3_TOOL_NAMES = {"list_dir", "glob", "read_file", "grep", "run_tests"}
-L3_TOOL_SCHEMAS = with_tool_purpose(
+REVIEWER_TOOL_NAMES = {"list_dir", "glob", "read_file", "grep", "run_tests"}
+REVIEWER_TOOL_SCHEMAS = with_tool_purpose(
     [
         schema
         for schema in filesystem.TOOL_SCHEMAS + testing.TOOL_SCHEMAS
-        if schema["name"] in L3_TOOL_NAMES
+        if schema["name"] in REVIEWER_TOOL_NAMES
     ]
 )
-L3_TOOLS = {name: tool for name, tool in (filesystem.TOOLS | testing.TOOLS).items() if name in L3_TOOL_NAMES}
+REVIEWER_TOOLS = {
+    name: tool
+    for name, tool in (filesystem.TOOLS | testing.TOOLS).items()
+    if name in REVIEWER_TOOL_NAMES
+}
 
-L4_TOOL_NAMES = {
+CODER_TOOL_NAMES = {
     "list_dir",
     "glob",
     "read_file",
@@ -55,29 +54,21 @@ L4_TOOL_NAMES = {
     "bash",
     "read_skill",
 }
-L4_TOOL_SCHEMAS = with_tool_purpose(
+CODER_TOOL_SCHEMAS = with_tool_purpose(
     [
         schema
         for schema in filesystem.TOOL_SCHEMAS + testing.TOOL_SCHEMAS + execution.TOOL_SCHEMAS + skills.TOOL_SCHEMAS
-        if schema["name"] in L4_TOOL_NAMES
+        if schema["name"] in CODER_TOOL_NAMES
     ]
 )
-L4_TOOLS = {
+CODER_TOOLS = {
     name: tool
     for name, tool in (filesystem.TOOLS | testing.TOOLS | execution.TOOLS | skills.TOOLS).items()
-    if name in L4_TOOL_NAMES
+    if name in CODER_TOOL_NAMES
 }
-L4_WRITE_TOOLS = {"create_file", "delete_file", "edit_file"}
+CODER_WRITE_TOOLS = {"create_file", "delete_file", "edit_file"}
 
-# L5 codes and tests just like L4, so it shares L4's tool set and write tools.
-L5_TOOL_SCHEMAS = L4_TOOL_SCHEMAS
-L5_TOOLS = L4_TOOLS
-L5_WRITE_TOOLS = L4_WRITE_TOOLS
 
-# The implementers (L4/L5) can pull skills on demand. We list the catalog in their
-# system prompt and give them the read_skill tool to load one when it fits. The
-# catalog and the evolver-learned guidance are read fresh per session (not frozen
-# at import) so a new policy/skill checkpoint takes effect on the next run.
 def _skills_note():
     catalog = skill_catalog_text()
     if not catalog:
@@ -89,20 +80,6 @@ def _skills_note():
     )
 
 
-def l4_system_prompt():
-    return coder_system_prompt()
-
-
-def l3_system_prompt():
-    return reviewer_system_prompt()
-
-
-def l5_system_prompt():
-    return coder_system_prompt()
-
-
-# The run_* helpers send ONE turn to a specialist. Pass a live `session` to keep
-# the same agent alive across a loop; omit it for a one-shot agent (e.g. jury).
 def run_reviewer(api_key, model, task, context="", trace_sink=None, run_log_path=None, turn_id=None, session=None):
     if session is None:
         session = new_reviewer_session(api_key, model, trace_sink=trace_sink, run_log_path=run_log_path, turn_id=turn_id)
@@ -114,12 +91,6 @@ def run_coder(api_key, model, task, context="", feedback="", trace_sink=None, ap
         session = new_coder_session(api_key, model, trace_sink=trace_sink, approval_callback=approval_callback, run_log_path=run_log_path, turn_id=turn_id)
     prompt = user_prompt if user_prompt is not None else coder_user_prompt(task, context, feedback)
     return session.send(prompt)
-
-
-# Legacy names
-run_l3_test_engineer = run_reviewer
-run_l4_engineer = run_coder
-run_l5_engineer = run_coder
 
 
 def reviewer_user_prompt(task, context):
@@ -138,11 +109,6 @@ def coder_user_prompt(task, context, feedback):
     return prompt
 
 
-# Back-compat alias
-l3_user_prompt = reviewer_user_prompt
-l4_l5_user_prompt = coder_user_prompt
-
-
 def reviewer_review_passed(report):
     first_line = report.strip().splitlines()[0].strip().lower() if report.strip() else ""
     return first_line == "review_verdict: pass"
@@ -150,12 +116,7 @@ def reviewer_review_passed(report):
 
 def coder_ready_for_review(report):
     first_line = report.strip().splitlines()[0].strip().lower() if report.strip() else ""
-    return first_line in {"coder_status: ready_for_review", "l4_status: ready_for_review", "l5_status: ready_for_review"}
-
-
-l3_review_passed = reviewer_review_passed
-l4_ready_for_review = coder_ready_for_review
-l5_ready_for_review = coder_ready_for_review
+    return first_line == "coder_status: ready_for_review"
 
 
 class SpecialistSession:
@@ -183,8 +144,6 @@ class SpecialistSession:
         self.messages = [{"role": "system", "content": system_prompt}]
         self.tool_history = []
         self.step = 0
-        # This instance's own worklog file, so two L3s (or L4s) in the same review
-        # never write into one another's trace.
         self.worklog_id = new_worklog_id(run_log_path, label)
 
     def send(self, user_prompt):
@@ -242,22 +201,17 @@ def run_specialist_agent(api_key, model, system_prompt, user_prompt, tool_schema
 
 def new_reviewer_session(api_key, model, trace_sink=None, run_log_path=None, turn_id=None):
     return SpecialistSession(
-        api_key, model, reviewer_system_prompt(), L3_TOOL_SCHEMAS, L3_TOOLS, "Reviewer",
+        api_key, model, reviewer_system_prompt(), REVIEWER_TOOL_SCHEMAS, REVIEWER_TOOLS, "Reviewer",
         trace_sink=trace_sink, run_log_path=run_log_path, turn_id=turn_id,
     )
 
 
 def new_coder_session(api_key, model, trace_sink=None, approval_callback=None, run_log_path=None, turn_id=None, write_guard=None):
     return SpecialistSession(
-        api_key, model, coder_system_prompt(), L4_TOOL_SCHEMAS, L4_TOOLS, "Coder",
+        api_key, model, coder_system_prompt(), CODER_TOOL_SCHEMAS, CODER_TOOLS, "Coder",
         trace_sink=trace_sink, approval_callback=approval_callback, run_log_path=run_log_path, turn_id=turn_id,
         write_guard=write_guard,
     )
-
-
-new_l3_session = new_reviewer_session
-new_l4_session = new_coder_session
-new_l5_session = new_coder_session
 
 
 def create_specialist_response(api_key, model, messages, tool_schemas, label):
@@ -279,11 +233,11 @@ def run_specialist_tool_call(call, tools, label, approval_callback=None, write_g
         arguments = strip_tool_purpose(json.loads(call.get("arguments") or "{}"))
         if name not in tools:
             raise ValueError(f"Unknown {label} tool: {name}")
-        if write_guard is not None and name in L4_WRITE_TOOLS:
+        if write_guard is not None and name in CODER_WRITE_TOOLS:
             guard_error = write_guard(name, arguments)
             if guard_error:
                 raise PermissionError(guard_error)
-        if label in ("Coder", "L4 engineer", "L5 engineer") and name in L4_WRITE_TOOLS and not approve_coder_tool_write(
+        if label == "Coder" and name in CODER_WRITE_TOOLS and not approve_coder_tool_write(
             label,
             name,
             arguments,
@@ -300,10 +254,7 @@ def run_specialist_tool_call(call, tools, label, approval_callback=None, write_g
 def approve_coder_tool_write(label, name, arguments, approval_callback=None):
     if approval_callback is not None:
         return approval_callback(label, name, arguments)
-    return approve_l4_write_tool(name, arguments)
-
-
-approve_l4_tool_write = approve_coder_tool_write
+    return approve_coder_write_tool(name, arguments)
 
 
 def max_steps_report(label, tool_history):
@@ -312,10 +263,8 @@ def max_steps_report(label, tool_history):
 
 def stopped_report(label, reason, tool_history):
     header = f"{label} stopped because it {reason}."
-    if label in ("Coder", "L4 engineer"):
+    if label == "Coder":
         header = "CODER_STATUS: IN_PROGRESS\nSummary: " + header
-    elif label in ("L5 engineer",):
-        header = "L5_STATUS: IN_PROGRESS\nSummary: " + header
     if not tool_history:
         return header
 
@@ -341,14 +290,13 @@ def compact_tool_output(output, max_chars=500):
     return compact[:max_chars] + "..."
 
 
-def approve_l4_write_tool(name, arguments):
+def approve_coder_write_tool(name, arguments):
     if not sys.stdin.isatty():
         return False
 
-    print(f"\nApprove L4 write tool: {name}")
+    print(f"\nApprove coder write tool: {name}")
     print(json.dumps(arguments, ensure_ascii=False, indent=2))
-    answer = input("Allow L4 to run this write tool? [y/N] ")
+    answer = input("Allow coder to run this write tool? [y/N] ")
     if answer.strip().lower() in {"y", "yes"}:
         return True
-    # Denying at the prompt aborts the whole turn and returns to the REPL.
     raise control.TurnAborted(f"{name} was denied.")

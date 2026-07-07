@@ -372,16 +372,16 @@ def main():
     summary_path = out_dir / "kimi_code_run_summary.json"
     summary_path.write_text(json.dumps(run_summary, indent=2), encoding="utf-8")
 
-    computed = metrics.compute_metrics("l4", rows)
+    computed = metrics.compute_metrics("coder", rows)
     path = metrics.record_result(
-        "l4",
+        "coder",
         rows,
         model=f"kimi-code/{model_label}",
         dataset="langbridge-bench-kimi-code",
         notes=f"mode={args.mode}",
     )
     metrics.write_leaderboard()
-    print(f"\nmetrics (l4 schema): {computed}")
+    print(f"\nmetrics (coder schema): {computed}")
     print(f"recorded: {path}")
     print(f"summary: {summary_path}")
     print(f"artifacts: {artifacts_root}")

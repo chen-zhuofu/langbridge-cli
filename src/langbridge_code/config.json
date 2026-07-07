@@ -72,7 +72,6 @@
   "paths": {
     "agent_state_dir": null,
     "runs_dir": null,
-    "todo_list_path": null,
-    "component_plan_dir": null
+    "todo_list_path": null
   }
 }

@@ -3,9 +3,9 @@ import langbridge_code.persistence.agent_worklog as agent_worklog
 
 def test_worklog_writes_nothing_without_an_active_run():
     # No run_log_path means no active loop (e.g. unit tests) -> nothing is written.
-    agent_worklog.write_worklog_finish(None, "PM agent", 1, 1, "done")
-    assert agent_worklog.worklog_path(None, "PM agent") is None
-    assert agent_worklog.new_worklog_id(None, "PM agent") is None
+    agent_worklog.write_worklog_finish(None, "Coder", 1, 1, "done")
+    assert agent_worklog.worklog_path(None, "Coder") is None
+    assert agent_worklog.new_worklog_id(None, "Coder") is None
 
 
 def test_worklog_appends_to_one_instance_file(tmp_path, monkeypatch):

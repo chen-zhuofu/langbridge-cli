@@ -4,8 +4,8 @@ from langbridge_code.llm.debug import print_llm_request, print_llm_response
 def test_llm_debug_output_is_disabled_by_default(capsys, monkeypatch):
     monkeypatch.delenv("LANGBRIDGE_DEBUG_LLM", raising=False)
 
-    print_llm_request("PM agent", "model", [{"role": "user", "content": "hello"}])
-    print_llm_response("PM agent", {"output": []})
+    print_llm_request("Coder", "model", [{"role": "user", "content": "hello"}])
+    print_llm_response("Coder", {"output": []})
 
     assert capsys.readouterr().out == ""
 
@@ -14,15 +14,15 @@ def test_llm_debug_output_formats_request_and_response(capsys, monkeypatch):
     monkeypatch.setenv("LANGBRIDGE_DEBUG_LLM", "1")
     monkeypatch.setenv("LANGBRIDGE_DEBUG_LLM_MAX_CHARS", "500")
 
-    print_llm_request("PM agent", "model", [{"role": "user", "content": "implement calculator"}])
+    print_llm_request("Coder", "model", [{"role": "user", "content": "implement calculator"}])
     print_llm_response(
-        "PM agent",
+        "Coder",
         {
             "output": [
                 {"type": "reasoning", "summary": []},
                 {
                     "type": "message",
-                    "content": [{"type": "output_text", "text": "Ask L4 to implement the calculator."}],
+                    "content": [{"type": "output_text", "text": "Implement the calculator."}],
                 },
                 {
                     "type": "function_call",
@@ -36,7 +36,7 @@ def test_llm_debug_output_formats_request_and_response(capsys, monkeypatch):
 
     output = capsys.readouterr().out
     assert output == (
-        "[LLM DEBUG] PM agent output: 1. message: Ask L4 to implement the calculator. | "
+        "[LLM DEBUG] Coder output: 1. message: Implement the calculator. | "
         '2. purpose: Write the todo list. -> function_call '
         'update_plan({"content":"# Todo"}) '
         "call_id=call_1\n"
@@ -50,7 +50,7 @@ def test_llm_debug_output_truncates_long_items(capsys, monkeypatch):
     long_text = "x" * 300
 
     print_llm_response(
-        "PM agent",
+        "Coder",
         {
             "output": [
                 {

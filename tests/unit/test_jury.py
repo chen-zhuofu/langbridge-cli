@@ -1,49 +1,35 @@
-import threading
-
-from langbridge_code.training import jury as jury_module
+import langbridge_code.training.jury as jury_module
 
 
-def test_run_jurors_execute_concurrently(monkeypatch):
-    active = {"count": 0, "max": 0}
-    lock = threading.Lock()
-    both_started = threading.Event()
-
-    def fake_l3(*args, **kwargs):
-        with lock:
-            active["count"] += 1
-            active["max"] = max(active["max"], active["count"])
-            if active["count"] == jury_module.JUROR_COUNT:
-                both_started.set()
-        assert both_started.wait(timeout=2)
-        with lock:
-            active["count"] -= 1
+def test_jury_passes_when_both_jurors_pass(monkeypatch):
+    def fake_reviewer(*args, **kwargs):
         return "REVIEW_VERDICT: PASS\nEvidence: ok"
 
-    monkeypatch.setattr(jury_module, "run_l3_test_engineer", fake_l3)
-
-    reports = jury_module._run_jurors("key", "model", "task", "context")
-
-    assert len(reports) == 2
-    assert active["max"] == 2
-
-
-def test_make_jury_fn_requires_unanimous_pass(monkeypatch):
-    verdicts = iter(
-        [
-            "REVIEW_VERDICT: PASS\nEvidence: ok",
-            "REVIEW_VERDICT: FAIL\nIssues: bad",
-        ]
-    )
-
-    def fake_l3(*args, **kwargs):
-        return next(verdicts)
-
-    monkeypatch.setattr(jury_module, "run_l3_test_engineer", fake_l3)
+    monkeypatch.setattr(jury_module, "run_reviewer", fake_reviewer)
 
     jury_fn = jury_module.make_jury_fn("key", "model")
-    result = jury_fn(
+    verdict = jury_fn(
         {"problem_statement": "fix bug"},
-        {"worker": "l4", "final_report": "L4_STATUS: READY_FOR_REVIEW\nSummary: done"},
+        {"final_report": "CODER_STATUS: READY_FOR_REVIEW\nSummary: done"},
     )
+    assert verdict["jury_pass"] is True
+    assert verdict["verified"] is True
 
-    assert result == {"jury_pass": False, "verified": True}
+
+def test_jury_fails_when_one_juror_fails(monkeypatch):
+    calls = {"n": 0}
+
+    def fake_reviewer(*args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return "REVIEW_VERDICT: PASS\nEvidence: ok"
+        return "REVIEW_VERDICT: FAIL\nIssues: bad"
+
+    monkeypatch.setattr(jury_module, "run_reviewer", fake_reviewer)
+
+    jury_fn = jury_module.make_jury_fn("key", "model")
+    verdict = jury_fn(
+        {"problem_statement": "fix bug"},
+        {"worker": "coder", "final_report": "CODER_STATUS: READY_FOR_REVIEW\nSummary: done"},
+    )
+    assert verdict["jury_pass"] is False

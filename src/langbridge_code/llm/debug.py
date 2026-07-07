@@ -6,7 +6,7 @@ from langbridge_code.llm.parse import extract_output_text, truncate_text
 from langbridge_code.llm.tool_schema import TOOL_PURPOSE_ARGUMENT
 
 
-DEBUG_AGENT_LABELS = {"PM agent", "L4 engineer", "L3 test engineer"}
+DEBUG_AGENT_LABELS = {"Planner", "Coder", "Reviewer", "Presenter"}
 
 
 def llm_debug_enabled():

@@ -33,11 +33,12 @@ from langbridge_code.training import gate, signals
 
 EVOLVER_SYSTEM = """You improve a team of coding agents by editing their shared policy, not their code.
 
-The team has four roles:
-- PM: breaks a user_task into component_tasks, routes each to L4 (normal) or L5 (hard), and runs a final e2e check.
-- L4: implements a normal component_task and writes tests.
-- L5: implements a HARD component_task by divide-and-conquer.
-- L3: the tester/reviewer that verifies L4/L5 work and votes PASS/FAIL.
+The team has these workflow roles:
+- Router: classifies chat vs task.
+- Planner: breaks hard work into a todo_list.
+- Coder: implements a coding todo item and writes tests.
+- Reviewer: verifies coder work and votes PASS/FAIL.
+- Presenter: builds presentation deliverables.
 
 You are given a batch of recent traces, the recurring problems across the batch,
 and the current policy. Propose concrete, GENERAL improvements that fix the BASE
@@ -48,17 +49,15 @@ Rules:
   truth, the jury, pass/fail labels). Guidance must be actionable from what the
   agent can observe.
 - Prefer refining/removing a stale bullet over endlessly stacking new ones.
-- Only tighten or loosen L3 (the reviewer) when the evidence shows a real
-  calibration error.
+- Only tighten or loosen the reviewer when the evidence shows a real calibration error.
 
 Reply with ONLY a JSON object with any of these optional fields:
 {
   "diagnosis": "one sentence on the systemic issue",
-  "pm_guidance_add": ["..."], "pm_guidance_remove": ["..."], "pm_guidance_replace": [{"old":"...","new":"..."}],
-  "l4_guidance_add": ["..."], "l4_guidance_remove": ["..."], "l4_guidance_replace": [{"old":"...","new":"..."}],
-  "l5_guidance_add": ["..."], "l5_guidance_remove": ["..."], "l5_guidance_replace": [{"old":"...","new":"..."}],
-  "l3_guidance_add": ["..."], "l3_guidance_remove": ["..."], "l3_guidance_replace": [{"old":"...","new":"..."}],
-  "new_skills": [{"name":"...","target":"l4|l5|l3|pm|implementer|all","when":"...","content":"markdown playbook"}]
+  "coder_guidance_add": ["..."], "coder_guidance_remove": ["..."], "coder_guidance_replace": [{"old":"...","new":"..."}],
+  "reviewer_guidance_add": ["..."], "reviewer_guidance_remove": ["..."], "reviewer_guidance_replace": [{"old":"...","new":"..."}],
+  "planner_guidance_add": ["..."], "planner_guidance_remove": ["..."], "planner_guidance_replace": [{"old":"...","new":"..."}],
+  "new_skills": [{"name":"...","target":"coder|reviewer|planner|implementer|all","when":"...","content":"markdown playbook"}]
 }
 """
 

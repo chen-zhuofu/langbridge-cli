@@ -34,10 +34,9 @@ CONTAINER_REPO = "/work/repo"
 CONTAINER_ARTIFACTS = "/root/lb_artifacts"
 
 ROLE_LAYER = {
-    "loop": "l4",
-    "l4": "l4",
-    "l5": "l5",
-    "pm": "pm",
+    "loop": "coder",
+    "coder": "coder",
+    "workflow": "workflow",
 }
 
 
@@ -218,7 +217,7 @@ def run_one_spec(spec, artifacts_root, api_env, model, role, timeout, grade):
 
     duration = round(time.time() - started, 1)
     approved = bool(agent_out.get("approved"))
-    if role == "pm":
+    if role == "workflow":
         approved = bool(agent_out.get("completed"))
 
     summary = {
@@ -259,7 +258,7 @@ def _row_from_summary(summary, role, diff=""):
             "responsiveness": None,
             "alignment": None,
         }
-    if role in ("l4", "l5"):
+    if role in ("coder",):
         return {
             "task_id": task_id,
             "gt_pass": summary["gt_pass"],
@@ -267,14 +266,11 @@ def _row_from_summary(summary, role, diff=""):
             "patch_lines": _patch_lines(diff),
             "grade_status": summary["grade_status"],
         }
-    if role == "pm":
+    if role == "workflow":
         return {
             "task_id": task_id,
             "gt_pass": summary["gt_pass"],
             "completed": summary["approved"],
-            "component_tasks": None,
-            "pm_rounds": None,
-            "l5_fraction": None,
             "grade_status": summary["grade_status"],
         }
     raise ValueError(f"unsupported role {role}")

@@ -4,11 +4,11 @@ Examples (after setting the target repo + specs, see training/README.md):
 
   # Evaluate one role on the spec set under the current policy:
   LANGBRIDGE_TARGET_REPO=./arrow LANGBRIDGE_SPECS_DIR=training/specs \
-    python -m langbridge_code.training.cli eval --role l4 --limit 5
+    python -m langbridge_code.training.cli eval --role coder --limit 5
 
   # Evaluate against a frozen checkpoint instead of the live policy:
   LANGBRIDGE_POLICY_DIR=training/policy/checkpoints/epoch1 \
-    python -m langbridge_code.training.cli eval --role l3
+    python -m langbridge_code.training.cli eval --role reviewer
 
   # Run the evolver (self-play) for one epoch over the spec set:
   python -m langbridge_code.training.cli train --epochs 1 --batch-size 2
@@ -26,15 +26,11 @@ from langbridge_code.settings import (
 )
 from langbridge_code.training import bench, evolver, langbridge_bench, metrics
 from langbridge_code.training.evals import agents_adapter, runner
-from langbridge_code.training.l3_cases import l3_cases_from_specs
+from langbridge_code.training.reviewer_cases import reviewer_cases_from_specs
 
 
 def _build(args, model):
-    """Return (specs_for(hard), grade, calls) for the chosen task source.
-
-    Default source is langbridge-bench (on-disk specs under evals/langbridge-bench/specs/).
-    `--source local` uses a local git repo + cached specs (see bench.py).
-    """
+    """Return (specs_for(hard), grade, calls) for the chosen task source."""
     source = getattr(args, "source", "langbridge-bench")
     if source == "swebench":
         source = "langbridge-bench"
@@ -66,19 +62,17 @@ def cmd_eval(args):
     specs_for, grade, calls = _build(args, model)
     p = policy.load()
 
-    if args.role == "l4":
-        rows = runner.eval_l4(_limit(specs_for(hard=False), args), coder_fn=calls["coder_fn"], grade=grade)
-    elif args.role == "l5":
-        rows = runner.eval_l5(_limit(specs_for(hard=True), args), coder_fn=calls["l5_fn"], grade=grade)
-    elif args.role == "l3":
+    if args.role == "coder":
+        rows = runner.eval_coder(_limit(specs_for(), args), coder_fn=calls["coder_fn"], grade=grade)
+    elif args.role == "reviewer":
         specs = _limit(specs_for(), args)
-        cases = l3_cases_from_specs(specs, grade)
-        print(f"L3 reviewer: {len(cases)} cases ({len(specs)} tasks × gold + no_fix)")
-        rows = runner.eval_l3(cases, review_fn=calls["review_fn"])
+        cases = reviewer_cases_from_specs(specs, grade)
+        print(f"Reviewer: {len(cases)} cases ({len(specs)} tasks × gold + no_fix)")
+        rows = runner.eval_reviewer(cases, review_fn=calls["review_fn"])
     elif args.role == "loop":
         rows, _traces = runner.eval_loop(_limit(specs_for(), args), loop_fn=calls["loop_fn"], grade=grade)
-    elif args.role == "pm":
-        rows = runner.eval_pm(_limit(specs_for(), args), pm_fn=calls["pm_fn"], grade=grade)
+    elif args.role == "workflow":
+        rows = runner.eval_workflow(_limit(specs_for(), args), workflow_fn=calls["workflow_fn"], grade=grade)
     else:
         raise SystemExit(f"unknown role {args.role}")
 
@@ -134,7 +128,7 @@ def main():
     ps.set_defaults(func=cmd_specs)
 
     pe = sub.add_parser("eval", help="evaluate one role")
-    pe.add_argument("--role", required=True, choices=["l4", "l5", "l3", "loop", "pm"])
+    pe.add_argument("--role", required=True, choices=["coder", "reviewer", "loop", "workflow"])
     pe.add_argument("--source", default="langbridge-bench",
                     choices=["langbridge-bench", "swebench", "local"],
                     help="langbridge-bench (default), swebench (alias), or local git specs")

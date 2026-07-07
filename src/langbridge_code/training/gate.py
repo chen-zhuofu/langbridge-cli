@@ -4,7 +4,7 @@ Two deterministic pieces the evolver leans on:
 
 1. apply_proposal(policy, proposal, allow_reviewer): translate the evolver LLM's
    JSON proposal into concrete policy edits (guidance add/remove/replace per role,
-   plus new skills). The L3 (reviewer) levers are gated by `allow_reviewer` so the
+   plus new skills). Reviewer levers are gated by `allow_reviewer` so the
    reviewer is only re-tuned when there is a TRUSTWORTHY correctness signal in the
    batch (real tests or a unanimous jury) — the guard against reviewer collapse.
 
@@ -20,26 +20,20 @@ import re
 
 from langbridge_code import policy
 
-# Guidance/skills must never reference signals the agents cannot see at run time
-# (hidden tests, the ground-truth label, the jury, etc.) — that would be leaking
-# the oracle into the prompt. Drop any bullet that mentions these.
 _ORACLE_LEAK = re.compile(
     r"\b(ground[\s_-]?truth|gt_pass|fail_to_pass|pass_to_pass|hidden tests?|"
     r"oracle|the jury|reward[\s_-]?hack|f2p|p2p)\b",
     re.IGNORECASE,
 )
 
-# Map proposal role keys to policy roles. The evolver may address coder/reviewer
-# (neighbour vocabulary) or the concrete roles directly.
 _ROLE_KEYS = {
-    "pm": "pm",
-    "l4": "l4",
-    "l5": "l5",
-    "l3": "l3",
-    "reviewer": "l3",
-    "coder": "l4",  # plain "coder" guidance lands on L4 by default
+    "coder": "coder",
+    "reviewer": "reviewer",
+    "planner": "planner",
+    "router": "router",
+    "presenter": "presenter",
 }
-_REVIEWER_ROLES = {"l3"}
+_REVIEWER_ROLES = {"reviewer"}
 
 
 def _strip_leaks(bullets):
@@ -51,18 +45,7 @@ def _strip_leaks(bullets):
 
 
 def apply_proposal(p, proposal, allow_reviewer=True):
-    """Apply an evolver proposal dict to policy dict `p` in place.
-
-    Recognised proposal fields (all optional):
-      diagnosis                       : str (recorded, not applied)
-      <role>_guidance_add             : [str]
-      <role>_guidance_remove          : [str]   (substring matches)
-      <role>_guidance_replace         : [{old, new}]
-      new_skills                      : [{name, target, when, content}]
-
-    where <role> is one of pm/l4/l5/l3 (also accepts coder->l4, reviewer->l3).
-    Returns a `changes` dict describing what was applied (for the history log).
-    """
+    """Apply an evolver proposal dict to policy dict `p` in place."""
     changes = {"diagnosis": proposal.get("diagnosis", "")}
 
     for key, role in _ROLE_KEYS.items():
@@ -97,10 +80,9 @@ def apply_proposal(p, proposal, allow_reviewer=True):
     for sk in proposal.get("new_skills") or []:
         if not isinstance(sk, dict) or not sk.get("content"):
             continue
-        # A skill targeting the reviewer is gated the same way as its guidance.
         target = sk.get("target", "all")
         if policy._TARGET_ALIASES.get(target, (target,)) == ("reviewer",) and not allow_reviewer:
-            changes.setdefault("skipped", []).append("skill for l3: no anchor this batch")
+            changes.setdefault("skipped", []).append("skill for reviewer: no anchor this batch")
             continue
         sid = policy.add_skill(p, sk.get("name", "skill"), target,
                                sk.get("when", ""), sk["content"])
@@ -111,27 +93,24 @@ def apply_proposal(p, proposal, allow_reviewer=True):
     return changes
 
 
-# --------------------------------------------------------------------------- #
-# Acceptance gate scoring.                                                     #
-# --------------------------------------------------------------------------- #
 def sample_score(approved, passed):
     """Penalty for one graded loop outcome (higher = better; max 0)."""
     if approved and passed:
-        return 0      # correct: approved and the hidden tests pass
+        return 0
     if approved and not passed:
-        return -3     # reward hack: approved broken code (worst)
+        return -3
     if not approved and passed:
-        return -1     # false block: blocked good code
-    return -2         # unsolved: not approved and tests fail
+        return -1
+    return -2
 
 
 def gate_blame(approved, passed):
     if approved and not passed:
-        return "l4/l5+l3"   # reward hack — both share blame
+        return "coder+reviewer"
     if not approved and passed:
-        return "l3"         # false block — reviewer too strict
+        return "reviewer"
     if not approved and not passed:
-        return "l4/l5"      # unsolved — implementer
+        return "coder"
     return ""
 
 

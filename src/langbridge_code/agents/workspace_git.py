@@ -1,7 +1,7 @@
-"""Git checkpoints for L4/L5 component tasks.
+"""Git checkpoints for coder tasks.
 
-Each task attempt snapshots HEAD first. A passing L3 review is committed; a failed
-attempt resets the workspace to the snapshot so half-finished code does not
+Each task attempt snapshots HEAD first. A passing reviewer review is committed; a
+failed attempt resets the workspace to the snapshot so half-finished code does not
 accumulate. If the cwd is not a git repo, every call is a no-op.
 """
 import subprocess
@@ -36,7 +36,7 @@ def snapshot_head(cwd=None):
 
 
 def commit_task(label, task, cwd=None):
-    """Stage and commit workspace changes for a finished L4/L5 task."""
+    """Stage and commit workspace changes for a finished task."""
     if not _is_repo(cwd):
         return None
     _run_git("add", "-A", cwd=cwd)
@@ -48,10 +48,6 @@ def commit_task(label, task, cwd=None):
     if result.returncode != 0:
         return None
     return snapshot_head(cwd)
-
-
-def commit_sub_task(sub_task, cwd=None):
-    return commit_task("L5", sub_task, cwd=cwd)
 
 
 def revert_snapshot(commit, cwd=None):

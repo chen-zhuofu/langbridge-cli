@@ -18,11 +18,15 @@ def test_workflow_chat_reply_short_circuits(tmp_path, monkeypatch):
         "langbridge_code.workflow.run.route",
         lambda *args, **kwargs: {
             "kind": "chat",
-            "reply": "Hello from LangBridge Code.",
+            "reply": "",
             "hard": False,
             "task_type": "coding",
             "task_summary": "",
         },
+    )
+    monkeypatch.setattr(
+        "langbridge_code.workflow.run._chat_reply",
+        lambda *args, **kwargs: "Hello from LangBridge Code.",
     )
 
     reply = run_workflow("key", "model", "hi", run_log, 1, print_reply=False)
@@ -72,7 +76,7 @@ def test_workflow_hard_task_invokes_planner(tmp_path, monkeypatch):
 
     def fake_planner(*args, **kwargs):
         planner_calls.append(args)
-        _write_todo(run_log, ["- [ ] [coding] Build auth system"])
+        _write_todo(run_log, ["- [ ] Build auth system"])
 
     monkeypatch.setattr("langbridge_code.workflow.run.run_planner", fake_planner)
     monkeypatch.setattr(
@@ -88,7 +92,7 @@ def test_workflow_hard_task_invokes_planner(tmp_path, monkeypatch):
 
 def test_workflow_refines_plan_on_coder_failure(tmp_path, monkeypatch):
     run_log = tmp_path / "run.json"
-    _write_todo(run_log, ["- [ ] [coding] Fix login"])
+    _write_todo(run_log, ["- [ ] Fix login"])
 
     monkeypatch.setattr(
         "langbridge_code.workflow.run.route",

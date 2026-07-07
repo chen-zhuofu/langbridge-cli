@@ -164,17 +164,13 @@ def make_callables(workspaces, model=None, timeout=EVAL_LAYER_TIMEOUT_SECONDS):
         return out, diff, worklog
 
     def coder_fn(spec):
-        out, diff, _ = _agent(spec, "l4")
+        out, diff, _ = _agent(spec, "coder")
         return {"diff": diff, "turns": None, "report": out.get("report", "")}
 
-    def l5_fn(spec):
-        out, diff, _ = _agent(spec, "l5")
-        return {"diff": diff, "turns": None, "report": out.get("report", "")}
-
-    def loop_fn(spec, layer="l4"):
-        out, diff, worklog = _agent(spec, layer)
+    def loop_fn(spec):
+        out, diff, worklog = _agent(spec, "coder")
         return {
-            "task": spec["problem_statement"], "worker": layer,
+            "task": spec["problem_statement"], "worker": "coder",
             "rounds": worklog["rounds"] or [
                 {"round": 1, "diff": diff, "approved": bool(out.get("approved")),
                  "verdict": "pass" if out.get("approved") else "needs_work",
@@ -199,15 +195,14 @@ def make_callables(workspaces, model=None, timeout=EVAL_LAYER_TIMEOUT_SECONDS):
             if not ok:
                 workspaces.reset(repo_dir)
                 return {"approved": False}
-        out = _run_layer(py, repo_dir, "l3", case["problem_statement"],
+        out = _run_layer(py, repo_dir, "reviewer", case["problem_statement"],
                          context="A change was made; verify it.", model=model, timeout=timeout)
         workspaces.reset(repo_dir)
         return {"approved": bool(out.get("approved"))}
 
-    def pm_fn(spec):
-        out, diff, _ = _agent(spec, "pm")
-        return {"completed": bool(out.get("completed")), "diff": diff,
-                "component_tasks": None, "pm_rounds": None, "l5_fraction": None}
+    def workflow_fn(spec):
+        out, diff, _ = _agent(spec, "workflow")
+        return {"completed": bool(out.get("completed")), "diff": diff}
 
-    return {"coder_fn": coder_fn, "l5_fn": l5_fn, "loop_fn": loop_fn,
-            "review_fn": review_fn, "pm_fn": pm_fn}
+    return {"coder_fn": coder_fn, "loop_fn": loop_fn,
+            "review_fn": review_fn, "workflow_fn": workflow_fn}

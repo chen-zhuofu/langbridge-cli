@@ -1,11 +1,11 @@
 """policy.py — the mutable agent policy the evolver writes and the agents read.
 
-This is the shared state that lets the outer evolver loop improve PM / L4 / L5 / L3
+This is the shared state that lets the outer evolver loop improve workflow roles
 WITHOUT editing their code. Each agent run folds the current policy into its system
 prompt; the evolver appends to it after looking at a batch of traces.
 
 Two levers (a deliberate subset of what the neighbour's coder/reviewer evolver
-used, mapped onto this repo's four roles):
+used, mapped onto this repo's roles):
 
   1. guidance — bullet rules appended to a role's system prompt (workflow fixes
      and cautions distilled from past runs).
@@ -15,8 +15,8 @@ used, mapped onto this repo's four roles):
 
 Layout (POLICY_DIR, default <repo>/training/policy, override with LANGBRIDGE_POLICY_DIR):
 
-  policy.json          {version, pm:{guidance}, l4:{...}, l5:{...}, l3:{...},
-                        skills:[{id,name,when,target}], history:[...]}
+  policy.json          {version, router:{guidance}, planner:{...}, coder:{...},
+                        reviewer:{...}, presenter:{...}, skills:[...], history:[...]}
   skills/<id>/SKILL.md  one skill playbook (with frontmatter description)
   checkpoints/<label>/  a self-contained snapshot (policy.json + skills/ + meta.json)
 
@@ -36,20 +36,13 @@ from pathlib import Path
 
 from langbridge_code.settings import DEFAULT_MAX_GUIDANCE
 
-# The four roles in this repo's loop-engineering architecture.
 ROLES = ("router", "planner", "coder", "reviewer", "presenter")
-LEGACY_ROLES = ("pm", "l4", "l5", "l3")
 _TARGET_ALIASES = {
     "implementer": ("coder",),
     "engineer": ("coder",),
     "reviewer": ("reviewer",),
     "both": ("coder", "reviewer"),
     "all": ROLES,
-    # Legacy aliases
-    "l4": ("coder",),
-    "l3": ("reviewer",),
-    "l5": ("coder",),
-    "pm": ("router", "planner"),
 }
 
 MAX_GUIDANCE = int(os.environ.get("LANGBRIDGE_MAX_GUIDANCE", str(DEFAULT_MAX_GUIDANCE)))
@@ -59,8 +52,6 @@ def _default_policy_dir() -> str:
     env = os.environ.get("LANGBRIDGE_POLICY_DIR")
     if env:
         return os.path.abspath(env)
-    # <repo>/training/policy — stable regardless of the agent's working directory
-    # (agents cd into target repos during eval, so we cannot use cwd here).
     repo_root = Path(__file__).resolve().parents[2]
     return str(repo_root / "training" / "policy")
 
@@ -83,7 +74,7 @@ def checkpoints_dir() -> str:
 
 def _default():
     base = {"version": 0, "skills": [], "history": []}
-    for role in ROLES + LEGACY_ROLES:
+    for role in ROLES:
         base[role] = {"guidance": []}
     return base
 
@@ -99,41 +90,10 @@ def load():
     for k, v in base.items():
         if k not in p:
             p[k] = v
-    for role in ROLES + LEGACY_ROLES:
+    for role in ROLES:
         p.setdefault(role, {})
         p[role].setdefault("guidance", [])
-    _migrate_legacy_roles(p)
     return p
-
-
-def _migrate_legacy_roles(p):
-    """Copy guidance from old pm/l4/l5/l3 policy slots into workflow roles."""
-    legacy = {
-        "pm": ("router", "planner"),
-        "l4": ("coder",),
-        "l3": ("reviewer",),
-        "l5": ("coder",),
-    }
-    for old, targets in legacy.items():
-        block = p.get(old)
-        if not isinstance(block, dict):
-            continue
-        bullets = block.get("guidance") or []
-        for target in targets:
-            slot = p.setdefault(target, {"guidance": []})
-            slot.setdefault("guidance", [])
-            for bullet in bullets:
-                if bullet not in slot["guidance"]:
-                    slot["guidance"].append(bullet)
-    # Mirror workflow roles onto legacy slots for offline training (Phase 2 migration).
-    mirrors = {"coder": "l4", "reviewer": "l3", "planner": "pm", "router": "pm"}
-    for new_role, legacy_role in mirrors.items():
-        src = p.get(new_role, {}).get("guidance") or []
-        dst = p.setdefault(legacy_role, {"guidance": []})
-        dst.setdefault("guidance", [])
-        for bullet in src:
-            if bullet not in dst["guidance"]:
-                dst["guidance"].append(bullet)
 
 
 def save(p):
@@ -143,9 +103,6 @@ def save(p):
         json.dump(p, f, indent=2)
 
 
-# --------------------------------------------------------------------------- #
-# Read side — used by the role/prompt code at runtime.                         #
-# --------------------------------------------------------------------------- #
 def guidance_text(role, p=None):
     p = p or load()
     bullets = p.get(role, {}).get("guidance", [])
@@ -171,12 +128,7 @@ def skill_index_text(role, p=None):
 
 
 def apply(role, base_prompt, p=None):
-    """Fold the current policy for `role` into its base system prompt.
-
-    Additive: an empty policy returns base_prompt unchanged, so turning the
-    evolver off is a no-op. Read fresh at session-creation time so a newly
-    checkpointed policy takes effect on the next run.
-    """
+    """Fold the current policy for `role` into its base system prompt."""
     if role not in ROLES:
         return base_prompt
     p = p or load()
@@ -196,37 +148,16 @@ def apply(role, base_prompt, p=None):
     return out
 
 
-# --------------------------------------------------------------------------- #
-# Write side — used by the evolver to apply updates.                           #
-# --------------------------------------------------------------------------- #
 def _slug(name):
     s = re.sub(r"[^a-z0-9]+", "_", (name or "").lower()).strip("_")
     return s or "skill"
 
 
-_LEGACY_TO_WORKFLOW = {"l4": "coder", "l5": "coder", "l3": "reviewer", "pm": "planner"}
-_WORKFLOW_TO_LEGACY = {"coder": "l4", "reviewer": "l3", "planner": "pm", "router": "pm"}
-
-
-def _canonical_role(role):
-    if role in ROLES:
-        return role
-    return _LEGACY_TO_WORKFLOW.get(role)
-
-
-def _sync_legacy_guidance(p):
-    for workflow_role, legacy_role in _WORKFLOW_TO_LEGACY.items():
-        src = p.get(workflow_role, {}).get("guidance") or []
-        dst = p.setdefault(legacy_role, {"guidance": []})
-        dst["guidance"] = list(src)
-
-
 def add_guidance(p, role, bullets):
     """Append new, non-duplicate bullets; cap to MAX_GUIDANCE (drop oldest)."""
-    canon = _canonical_role(role)
-    if canon not in ROLES:
+    if role not in ROLES:
         return []
-    cur = p[canon]["guidance"]
+    cur = p[role]["guidance"]
     have = {b.strip().lower() for b in cur}
     added = []
     for b in bullets or []:
@@ -236,8 +167,7 @@ def add_guidance(p, role, bullets):
             have.add(b.lower())
             added.append(b)
     if len(cur) > MAX_GUIDANCE:
-        p[canon]["guidance"] = cur[-MAX_GUIDANCE:]
-    _sync_legacy_guidance(p)
+        p[role]["guidance"] = cur[-MAX_GUIDANCE:]
     return added
 
 
@@ -250,27 +180,24 @@ def _guidance_match(cur, needle):
 
 def remove_guidance(p, role, needles):
     """Drop guidance bullets matching any needle (case-insensitive substring)."""
-    canon = _canonical_role(role)
-    if canon not in ROLES:
+    if role not in ROLES:
         return []
-    cur = p[canon]["guidance"]
+    cur = p[role]["guidance"]
     drop = set()
     for nd in needles or []:
         drop.update(_guidance_match(cur, nd))
     removed = [cur[i] for i in sorted(drop)]
     if drop:
-        p[canon]["guidance"] = [b for i, b in enumerate(cur) if i not in drop]
-    _sync_legacy_guidance(p)
+        p[role]["guidance"] = [b for i, b in enumerate(cur) if i not in drop]
     return removed
 
 
 def replace_guidance(p, role, pairs):
     """Rewrite bullets in place. Each pair is {old, new}: `old` matches an existing
     bullet by substring (first match) and is overwritten by `new`."""
-    canon = _canonical_role(role)
-    if canon not in ROLES:
+    if role not in ROLES:
         return []
-    cur = p[canon]["guidance"]
+    cur = p[role]["guidance"]
     applied = []
     for pr in pairs or []:
         if not isinstance(pr, dict):
@@ -289,18 +216,12 @@ def replace_guidance(p, role, pairs):
         cur[i] = new
         applied.append(new)
     if len(cur) > MAX_GUIDANCE:
-        p[canon]["guidance"] = cur[-MAX_GUIDANCE:]
-    _sync_legacy_guidance(p)
+        p[role]["guidance"] = cur[-MAX_GUIDANCE:]
     return applied
 
 
 def add_skill(p, name, target, when, content):
-    """Write a skill playbook (skills/<id>/SKILL.md) and register it. Returns id.
-
-    The file matches langbridge_code.skills' format (YAML frontmatter + body), so
-    the existing read_skill tool and catalog pick it up once the policy skills dir
-    is on the skills search path.
-    """
+    """Write a skill playbook (skills/<id>/SKILL.md) and register it. Returns id."""
     target = target if target in ROLES or target in _TARGET_ALIASES else "all"
     base = _slug(name)
     existing = {s["id"] for s in p["skills"]}
@@ -324,11 +245,6 @@ def record(p, entry):
     return p["version"]
 
 
-# --------------------------------------------------------------------------- #
-# Checkpointing — snapshot/restore the learned policy during training.         #
-# A checkpoint dir is itself a valid POLICY_DIR, so you can pin a frozen        #
-# policy for eval/resume with LANGBRIDGE_POLICY_DIR=.../checkpoints/<label>.    #
-# --------------------------------------------------------------------------- #
 def _copy_policy_into(dest):
     os.makedirs(dest, exist_ok=True)
     pf = policy_file()

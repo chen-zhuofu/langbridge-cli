@@ -101,13 +101,7 @@ def _bind(cfg):
         "MAX_PRESENTER_STEPS": agent.get("max_presenter_steps", 30),
         "MAX_PRESENTER_SECONDS": agent.get("max_presenter_seconds", 900),
         "WORKFLOW_OUTER_MULTIPLIER": agent.get("workflow_outer_multiplier", 2),
-        # Back-compat aliases for training/eval until fully migrated.
-        "MAX_L4_L3_TURNS": agent.get("max_coder_reviewer_rounds", 5),
-        "MAX_L4_L3_SECONDS": agent.get("max_coder_reviewer_seconds", 1800),
-        "MAX_PM_LOOPS": 20,
-        "MAX_PM_SECONDS": agent.get("max_workflow_seconds", 3600),
         "MAX_AGENT_SECONDS": agent.get("max_workflow_seconds", 3600),
-        "MAX_L5_RALPH_TURNS": 0,
         "MAX_AGENT_CONTEXT_TOKENS": context["max_agent_context_tokens"],
         "MAX_SPECIALIST_CONTEXT_TOKENS": context["max_specialist_context_tokens"],
         "MAX_TOOL_SUMMARY_OUTPUT_CHARS": context["max_tool_summary_output_chars"],
@@ -147,16 +141,11 @@ def _bind(cfg):
         paths.get("agent_state_dir"),
         workspace_root / "agent-state",
     )
-    pm_state_dir = agent_state_dir / "pm"
     workflow_state_dir = agent_state_dir / "workflow"
     globals().update({
         "WORKSPACE_ROOT": workspace_root,
         "AGENT_STATE_DIR": agent_state_dir,
         "WORKFLOW_STATE_DIR": workflow_state_dir,
-        "PM_STATE_DIR": pm_state_dir,
-        "L3_STATE_DIR": agent_state_dir / "reviewer",
-        "L4_STATE_DIR": agent_state_dir / "coder",
-        "L5_STATE_DIR": agent_state_dir / "l5",
         "CODER_STATE_DIR": agent_state_dir / "coder",
         "REVIEWER_STATE_DIR": agent_state_dir / "reviewer",
         "PLANNER_STATE_DIR": agent_state_dir / "planner",
@@ -164,22 +153,14 @@ def _bind(cfg):
         "RUNS_DIR": _path_override(
             "LANGBRIDGE_RUNS_DIR",
             paths.get("runs_dir"),
-            pm_state_dir / "session-history",
+            workflow_state_dir / "session-history",
         ),
         "TODO_LIST_PATH": _path_override(
             "LANGBRIDGE_TODO_LIST_PATH",
             paths.get("todo_list_path"),
-            pm_state_dir / "todo_list.md",
+            workflow_state_dir / "todo_list.md",
         ),
-        "COMPONENT_PLAN_DIR": _path_override(
-            "LANGBRIDGE_COMPONENT_PLAN_DIR",
-            paths.get("component_plan_dir"),
-            agent_state_dir / "l5" / "component-plans",
-        ),
-        "PM_WORKLOG_DIR": workflow_state_dir / "worklog",
-        "L3_WORKLOG_DIR": agent_state_dir / "reviewer" / "worklog",
-        "L4_WORKLOG_DIR": agent_state_dir / "coder" / "worklog",
-        "L5_WORKLOG_DIR": agent_state_dir / "l5" / "worklog",
+        "WORKFLOW_WORKLOG_DIR": workflow_state_dir / "worklog",
         "CODER_WORKLOG_DIR": agent_state_dir / "coder" / "worklog",
         "REVIEWER_WORKLOG_DIR": agent_state_dir / "reviewer" / "worklog",
         "PLANNER_WORKLOG_DIR": agent_state_dir / "planner" / "worklog",

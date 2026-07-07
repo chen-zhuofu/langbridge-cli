@@ -2,6 +2,9 @@
 from langbridge_code.agents import control
 from langbridge_code.agents.limits import now, over_time_budget
 from langbridge_code.agents.roles import CHAT_SYSTEM_PROMPT
+from langbridge_code.llm.client import create_model_response
+from langbridge_code.llm.parse import extract_output_text, print_step_trace
+from langbridge_code.persistence.context import recent_chat_turns
 from langbridge_code.persistence.logging import write_finish_log, write_input_log
 from langbridge_code.settings import MAX_WORKFLOW_SECONDS, WORKFLOW_OUTER_MULTIPLIER
 from langbridge_code.tools.plan import read_todo_list
@@ -33,28 +36,37 @@ def run_workflow(
     workflow_start = now()
 
     emit_phase(phase_sink, "routing")
-    decision = route(api_key, model, target)
+    decision = route(
+        api_key,
+        model,
+        target,
+        messages=messages,
+        trace_sink=trace_sink,
+    )
     if decision["kind"] == "chat":
         emit_phase(phase_sink, "summarizing")
-        reply = decision["reply"] or "Hello."
+        reply = _chat_reply(api_key, model, messages, target, trace_sink=trace_sink)
         return _finish_turn(messages, target, reply, run_log_path, turn_id, print_reply)
 
     user_task = decision["task_summary"] or target
-    if decision["hard"]:
-        emit_phase(phase_sink, "planning")
-        run_planner(
-            api_key,
-            model,
-            initial_plan_prompt(user_task),
-            trace_sink=trace_sink,
-            run_log_path=run_log_path,
-            turn_id=turn_id,
-        )
-    else:
-        tasks = todo_mod.single_task(user_task, task_type=decision["task_type"])
-        todo_mod.save_tasks(tasks, run_log_path)
+    task_type = decision["task_type"]
+    has_open_todos = todo_mod.unfinished_count(todo_mod.load_tasks(run_log_path)) > 0
+    if not has_open_todos:
+        if decision["hard"]:
+            emit_phase(phase_sink, "planning")
+            run_planner(
+                api_key,
+                model,
+                initial_plan_prompt(user_task, task_type=task_type),
+                trace_sink=trace_sink,
+                run_log_path=run_log_path,
+                turn_id=turn_id,
+            )
+        else:
+            tasks = todo_mod.single_task(user_task)
+            todo_mod.save_tasks(tasks, run_log_path)
 
-    context = f"Original user request:\n{target}"
+    context = _build_workflow_context(messages, target, decision)
     outer_limit = max(1, todo_mod.unfinished_count(todo_mod.load_tasks(run_log_path)) * WORKFLOW_OUTER_MULTIPLIER)
     outer_round = 0
     completed: list[str] = []
@@ -78,7 +90,7 @@ def run_workflow(
         passed = False
         detail = ""
 
-        if task.task_type == "coding":
+        if task_type == "coding":
             emit_phase(phase_sink, "coding")
             passed, detail = run_coder_reviewer_loop(
                 api_key,
@@ -91,7 +103,7 @@ def run_workflow(
                 turn_id=turn_id,
                 approval_callback=approval_callback,
             )
-        elif task.task_type == "presentation":
+        elif task_type == "presentation":
             emit_phase(phase_sink, "presenting")
             passed, detail = run_presenter_task(
                 api_key,
@@ -107,14 +119,19 @@ def run_workflow(
         if passed:
             todo_mod.mark_done(tasks, task)
             todo_mod.save_tasks(tasks, run_log_path)
-            completed.append(f"[{task.task_type}] {task.description}")
+            completed.append(task.description)
             continue
 
         emit_phase(phase_sink, "refining")
         run_planner(
             api_key,
             model,
-            refine_plan_prompt(task.description, task.task_type, detail, read_todo_list(run_log_path)),
+            refine_plan_prompt(
+                task.description,
+                detail,
+                read_todo_list(run_log_path),
+                task_type=task_type,
+            ),
             trace_sink=trace_sink,
             run_log_path=run_log_path,
             turn_id=turn_id,
@@ -131,12 +148,41 @@ def run_workflow(
             "Completed:\n"
             + "\n".join(f"- {item}" for item in completed)
             + "\n\nStill open:\n"
-            + "\n".join(f"- [{t.task_type}] {t.description}" for t in pending)
+            + "\n".join(f"- {t.description}" for t in pending)
         )
     else:
         reply = "Workflow could not complete the todo list. Check logs and todo_list."
 
     return _finish_turn(messages, target, reply, run_log_path, turn_id, print_reply)
+
+
+def _chat_reply(api_key, model, messages, user_message, *, trace_sink=None):
+    chat_input = [{"role": "system", "content": CHAT_SYSTEM_PROMPT}]
+    chat_input.extend(recent_chat_turns(messages))
+    chat_input.append({"role": "user", "content": user_message})
+
+    data = create_model_response(api_key, model, chat_input, label="Chat")
+    output = data.get("output", [])
+    if trace_sink is not None:
+        print_step_trace(output, include_message=True, label="Chat", sink=trace_sink)
+    text = extract_output_text(output).strip()
+    return text or "Hello."
+
+
+def _build_workflow_context(messages, target, decision):
+    lines = []
+    prior = recent_chat_turns(messages)
+    if prior:
+        transcript = "\n".join(
+            f"{'User' if turn['role'] == 'user' else 'Assistant'}: {turn['content']}"
+            for turn in prior[-8:]
+        )
+        lines.append(f"Conversation so far:\n{transcript}")
+    lines.append(f"Latest user request:\n{target}")
+    task_summary = (decision.get("task_summary") or "").strip()
+    if task_summary and task_summary != target.strip():
+        lines.append(f"Task focus:\n{task_summary}")
+    return "\n\n".join(lines)
 
 
 def _finish_turn(messages, target, reply, run_log_path, turn_id, print_reply):
@@ -146,7 +192,3 @@ def _finish_turn(messages, target, reply, run_log_path, turn_id, print_reply):
     if print_reply:
         print(f"\n{reply}\n")
     return reply
-
-
-# Back-compat alias for headless/tests migrating incrementally.
-run_pm_loop = run_workflow

@@ -1,18 +1,15 @@
-"""metrics.py — score and record the five evals in one place.
+"""metrics.py — score and record evals in one place.
 
 We score each role separately so co-optimization is visible: a gain on one side
-shouldn't be paid for by a hidden regression in another. The five eval types:
+shouldn't be paid for by a hidden regression in another. The eval types:
 
-  l4   : L4 alone implements a normal component_task -> graded by hidden tests.
-  l5   : L5 alone implements a HARD component_task by divide-and-conquer -> tests.
-  l3   : L3 alone judges (task, diff) cases -> agreement with the test-based label.
-  loop : the full L4<->L3 (or L5<->L3) inner review loop -> tests + loop quality.
-  pm   : the full PM turn (decompose -> route L4/L5 -> e2e) -> tests + plan/route.
+  coder    : Coder alone implements a task -> graded by hidden tests.
+  reviewer : Reviewer alone judges (task, diff) cases -> agreement with test label.
+  loop     : the full coder↔reviewer inner loop -> tests + loop quality.
+  workflow : the full workflow turn -> tests + completion.
 
 Ground truth is always the hidden regression tests for a task (see bench.py),
-computed offline and never shown to the agents. A runner collects per-item rows
-and calls record_result(); aggregates are computed here so every run is scored
-identically and comparably across epochs/checkpoints.
+computed offline and never shown to the agents.
 """
 import datetime
 import json
@@ -20,7 +17,7 @@ import os
 from pathlib import Path
 from typing import Optional
 
-EVAL_TYPES = ("l4", "l5", "l3", "pm", "loop")
+EVAL_TYPES = ("coder", "reviewer", "loop", "workflow")
 
 
 def results_dir() -> str:
@@ -45,27 +42,19 @@ def _mean(values) -> Optional[float]:
 
 
 def _coder_metrics(rows: list) -> dict:
-    """Shared by l4 and l5 (both implement and are graded by tests)."""
     n = len(rows)
     gt_pass = sum(1 for r in rows if r.get("gt_pass"))
     empty = sum(1 for r in rows if (r.get("patch_lines") or 0) == 0)
-    out = {
+    return {
         "n": n,
         "gt_pass_rate": _rate(gt_pass, n),
         "avg_turns": _mean([r.get("turns") for r in rows]),
         "avg_patch_lines": _mean([r.get("patch_lines") for r in rows]),
         "empty_patch_rate": _rate(empty, n),
     }
-    # L5 reports how many technical_sub_tasks it planned/finished.
-    if any("subtasks" in r for r in rows):
-        out["avg_subtasks"] = _mean([r.get("subtasks") for r in rows])
-        out["avg_subtasks_done"] = _mean([r.get("subtasks_done") for r in rows])
-    return out
 
 
 def _reviewer_metrics(rows: list) -> dict:
-    """L3: treat REVIEW_VERDICT PASS as predicting 'this patch is correct'.
-    Ground truth is gt_pass."""
     n = len(rows)
     tp = sum(1 for r in rows if r.get("approved") and r.get("gt_pass"))
     fp = sum(1 for r in rows if r.get("approved") and not r.get("gt_pass"))
@@ -79,9 +68,7 @@ def _reviewer_metrics(rows: list) -> dict:
     return {
         "n": n,
         "accuracy": _rate(tp + tn, n),
-        # false approval = passed broken code (too lenient -> reward-hacking risk)
         "false_approval_rate": _rate(fp, fp + tn),
-        # false rejection = blocked good code (too strict / nitpicky)
         "false_rejection_rate": _rate(fn, fn + tp),
         "precision": precision,
         "recall": recall,
@@ -91,7 +78,6 @@ def _reviewer_metrics(rows: list) -> dict:
 
 
 def _loop_metrics(rows: list) -> dict:
-    """Inner L4<->L3 / L5<->L3 loop."""
     n = len(rows)
     gt_pass = sum(1 for r in rows if r.get("gt_pass"))
     approved = sum(1 for r in rows if r.get("approved"))
@@ -106,9 +92,7 @@ def _loop_metrics(rows: list) -> dict:
         "approval_rate": _rate(approved, n),
         "first_pass_rate": _rate(first_pass, n),
         "avg_rounds": _mean([r.get("rounds") for r in rows]),
-        # reward hacking: L3 passed it, but the hidden tests fail.
         "reward_hack_rate": _rate(reward_hacked, n),
-        # false block: hidden tests pass, but L3 never passed it.
         "false_block_rate": _rate(false_block, n),
         "push_back_rate": _rate(pushed_back, n),
         "jury_rate": _rate(juries, n),
@@ -117,30 +101,24 @@ def _loop_metrics(rows: list) -> dict:
     }
 
 
-def _pm_metrics(rows: list) -> dict:
-    """Top-level PM turn: did the whole user_task land?"""
+def _workflow_metrics(rows: list) -> dict:
     n = len(rows)
     gt_pass = sum(1 for r in rows if r.get("gt_pass"))
-    completed = sum(1 for r in rows if r.get("completed"))  # PM reported BUG_STATUS: NONE
-    # reward hack at the PM level: PM declared done, but hidden tests fail.
+    completed = sum(1 for r in rows if r.get("completed"))
     reward_hacked = sum(1 for r in rows if r.get("completed") and not r.get("gt_pass"))
     return {
         "n": n,
         "gt_pass_rate": _rate(gt_pass, n),
         "completion_rate": _rate(completed, n),
         "reward_hack_rate": _rate(reward_hacked, n),
-        "avg_component_tasks": _mean([r.get("component_tasks") for r in rows]),
-        "avg_pm_rounds": _mean([r.get("pm_rounds") for r in rows]),
-        "l5_routing_rate": _mean([r.get("l5_fraction") for r in rows]),
     }
 
 
 _DISPATCH = {
-    "l4": _coder_metrics,
-    "l5": _coder_metrics,
-    "l3": _reviewer_metrics,
+    "coder": _coder_metrics,
+    "reviewer": _reviewer_metrics,
     "loop": _loop_metrics,
-    "pm": _pm_metrics,
+    "workflow": _workflow_metrics,
 }
 
 
@@ -203,17 +181,12 @@ def load_results(eval_type: str) -> list:
     return records
 
 
-# --------------------------------------------------------------------------- #
-# Leaderboard report.                                                          #
-# --------------------------------------------------------------------------- #
 _COLUMNS = {
-    "l4": ["gt_pass_rate", "avg_turns", "avg_patch_lines", "empty_patch_rate"],
-    "l5": ["gt_pass_rate", "avg_subtasks", "avg_turns", "empty_patch_rate"],
-    "l3": ["accuracy", "false_approval_rate", "false_rejection_rate", "f1"],
+    "coder": ["gt_pass_rate", "avg_turns", "avg_patch_lines", "empty_patch_rate"],
+    "reviewer": ["accuracy", "false_approval_rate", "false_rejection_rate", "f1"],
     "loop": ["gt_pass_rate", "approval_rate", "first_pass_rate", "avg_rounds",
              "reward_hack_rate", "false_block_rate"],
-    "pm": ["gt_pass_rate", "completion_rate", "reward_hack_rate",
-           "avg_component_tasks", "l5_routing_rate"],
+    "workflow": ["gt_pass_rate", "completion_rate", "reward_hack_rate"],
 }
 
 

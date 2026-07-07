@@ -1,4 +1,4 @@
-"""Build L3 reviewer eval cases from task specs.
+"""Build reviewer eval cases from task specs.
 
 Each spec expands into two cases with test-based ground truth:
   - gold: the real fix (should pass hidden tests)
@@ -8,11 +8,11 @@ Each spec expands into two cases with test-based ground truth:
 from langbridge_code.training import bench
 
 
-def l3_cases_from_specs(specs, grade):
-    """Return reviewer cases ready for runner.eval_l3 + review_fn.
+def reviewer_cases_from_specs(specs, grade):
+    """Return reviewer cases ready for runner.eval_reviewer + review_fn.
 
     `grade(task_id, code_diff)` must apply hidden tests and return
-    `{resolved: bool, ...}` (same grader as L4 eval).
+    `{resolved: bool, ...}` (same grader as coder eval).
     """
     cases = []
     for spec in specs:

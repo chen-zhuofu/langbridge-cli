@@ -2,18 +2,28 @@
 import json
 import re
 
-from langbridge_code.llm.client import create_model_response
 from langbridge_code.agents.roles import ROUTER_PROMPT
+from langbridge_code.llm.client import create_model_response
+from langbridge_code.llm.parse import print_step_trace
+from langbridge_code.persistence.context import recent_chat_turns
 
 _JSON_BLOCK = re.compile(r"\{[\s\S]*\}")
 
 
-def route(api_key, model, user_message: str) -> dict:
-    messages = [
-        {"role": "system", "content": ROUTER_PROMPT},
-        {"role": "user", "content": user_message},
-    ]
-    data = create_model_response(api_key, model, messages, label="Router")
+def route(api_key, model, user_message: str, *, messages=None, trace_sink=None) -> dict:
+    router_messages = [{"role": "system", "content": ROUTER_PROMPT}]
+    if messages:
+        router_messages.extend(recent_chat_turns(messages))
+    router_messages.append({"role": "user", "content": user_message})
+
+    data = create_model_response(api_key, model, router_messages, label="Router")
+    if trace_sink is not None:
+        print_step_trace(
+            data.get("output", []),
+            include_message=True,
+            label="Router",
+            sink=trace_sink,
+        )
     text = _extract_text(data)
     payload = _parse_json(text)
     kind = str(payload.get("kind", "chat")).strip().lower()

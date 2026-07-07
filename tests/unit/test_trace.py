@@ -15,12 +15,12 @@ def test_extract_trace_events_prefers_tool_purpose_and_hides_it_from_action():
         },
     ]
 
-    events = extract_trace_events(output, label="PM agent", include_message=True)
+    events = extract_trace_events(output, label="Coder", include_message=True)
 
     assert events == [
-        ThoughtEvent(role="PM agent", kind="thought", text="Inspect the README."),
+        ThoughtEvent(role="Coder", kind="thought", text="Inspect the README."),
         ThoughtEvent(
-            role="PM agent",
+            role="Coder",
             kind="action",
             text='read_file({"path":"README.md"})',
             tool_name="read_file",
@@ -31,8 +31,8 @@ def test_extract_trace_events_prefers_tool_purpose_and_hides_it_from_action():
 
 def test_format_approval_request_includes_role_tool_and_path():
     assert (
-        format_approval_request("L4 engineer", "edit_file", {"path": "x.py"})
-        == "L4 engineer: approve edit_file on x.py?"
+        format_approval_request("Coder", "edit_file", {"path": "x.py"})
+        == "Coder: approve edit_file on x.py?"
     )
 
 
@@ -41,7 +41,7 @@ def test_format_approval_request_summarizes_delegate_task():
         format_approval_request(
             "Planner",
             "update_plan",
-            {"content": "# Todo\n- [ ] [coding] Add monster"},
+            {"content": "# Todo\n- [ ] Add monster"},
         )
         == "Planner: approve update_plan?"
     )

@@ -1,17 +1,17 @@
 """Offline dispute jury for the evolver when hidden tests are unavailable.
 
-Runtime L4/L5 loops are a simple coder/reviewer back-and-forth (worktrial style).
+Runtime coder/reviewer loops are a simple back-and-forth (worktrial style).
 During training, grade() may return no ground truth — then jury_fn acts as the
-correctness anchor via two independent L3 reviewers.
+correctness anchor via two independent reviewers.
 """
 from concurrent.futures import ThreadPoolExecutor
 
-from langbridge_code.agents.multi_agent import l3_review_passed, run_l3_test_engineer
+from langbridge_code.agents.multi_agent import reviewer_review_passed, run_reviewer
 
 JUROR_COUNT = 2
 
 
-def juror_context(context, worker_report, worker_label="L4"):
+def juror_context(context, worker_report, worker_label="Coder"):
     parts = []
     if context:
         parts.append(context)
@@ -26,7 +26,7 @@ def juror_context(context, worker_report, worker_label="L4"):
 def _run_jurors(api_key, model, task, prompt):
     with ThreadPoolExecutor(max_workers=JUROR_COUNT) as pool:
         futures = [
-            pool.submit(run_l3_test_engineer, api_key, model, task, prompt)
+            pool.submit(run_reviewer, api_key, model, task, prompt)
             for _ in range(JUROR_COUNT)
         ]
         return [future.result() for future in futures]
@@ -38,8 +38,6 @@ def make_jury_fn(api_key, model):
     def jury_fn(spec, trace):
         task = spec.get("problem_statement") or trace.get("task") or ""
         context = spec.get("context", "")
-        worker = (trace.get("worker") or "l4").lower()
-        worker_label = "L5" if worker == "l5" else "L4"
         report = trace.get("final_report") or trace.get("final_diff") or ""
         if not report.strip():
             rounds = trace.get("rounds") or []
@@ -48,9 +46,9 @@ def make_jury_fn(api_key, model):
         if not report.strip():
             return {"jury_pass": None, "verified": False}
 
-        prompt = juror_context(context, report, worker_label)
+        prompt = juror_context(context, report, "Coder")
         reports = _run_jurors(api_key, model, task, prompt)
-        jury_pass = all(l3_review_passed(report) for report in reports)
+        jury_pass = all(reviewer_review_passed(report) for report in reports)
         return {"jury_pass": jury_pass, "verified": True}
 
     return jury_fn

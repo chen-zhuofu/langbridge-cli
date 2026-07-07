@@ -4,7 +4,7 @@ The eval adapter spawns this as a subprocess with the working directory
 set to a fresh checkout of the target repo at a task's base_commit.
 
 Inputs (env):
-  LANGBRIDGE_LAYER     : "workflow" | "coder" | "reviewer" | "l4" | "l3" (legacy aliases)
+  LANGBRIDGE_LAYER     : "workflow" | "coder" | "reviewer"
   LANGBRIDGE_TASK      : the task / problem statement (or read from stdin)
   LANGBRIDGE_CONTEXT   : optional extra context for coder/reviewer
   LANGBRIDGE_MODEL     : model override (else config default)
@@ -42,7 +42,7 @@ def main():
     approved = False
     completed = False
 
-    if layer in ("workflow", "pm"):
+    if layer == "workflow":
         from langbridge_code.workflow.run import run_workflow
 
         report = run_workflow(
@@ -56,10 +56,10 @@ def main():
         )
         completed = "Workflow complete" in report
         approved = completed
-    elif layer in ("coder", "l4", "l5"):
-        from langbridge_code.agents.agent import run_l4_component
+    elif layer == "coder":
+        from langbridge_code.agents.agent import run_coder_component
 
-        report = run_l4_component(
+        report = run_coder_component(
             api_key,
             model,
             {"task": task, "context": context},
@@ -69,7 +69,7 @@ def main():
         )
         approved = "WORKFLOW_REVIEW_STATUS: OK" in report
         completed = approved
-    elif layer in ("reviewer", "l3"):
+    elif layer == "reviewer":
         from langbridge_code.agents.multi_agent import reviewer_review_passed, run_reviewer
 
         report = run_reviewer(
@@ -95,7 +95,6 @@ def main():
                 "approved": approved,
                 "completed": completed,
                 "optimizer_trace": trace_file,
-                # Legacy field name for older adapters.
                 "shared_worklog": trace_file,
             }
         )

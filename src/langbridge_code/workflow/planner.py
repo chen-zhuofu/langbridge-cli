@@ -48,25 +48,45 @@ def run_planner(
     return session.send(prompt)
 
 
-def initial_plan_prompt(user_task: str) -> str:
+def initial_plan_prompt(user_task: str, task_type: str = "coding") -> str:
+    if task_type == "presentation":
+        kind_rule = (
+            "Task type: presentation. Split the deck into several component-level "
+            "steps (one per major section or deliverable)."
+        )
+        test_note = ""
+    else:
+        kind_rule = (
+            "Task type: coding. Break the work into implementation and verification "
+            "steps at component/acceptance level."
+        )
+        test_note = "The last item should be an end-to-end test when appropriate. "
     return (
         "Create a todo_list for this user task. Break hard work into several "
         "component-level tasks. Each line must be:\n"
-        "  - [ ] [coding] <description>\n"
-        "  - [ ] [presentation] <description>\n"
-        "The last coding task should be an end-to-end test when appropriate. "
+        "  - [ ] <description>\n"
+        f"{kind_rule}\n"
+        f"{test_note}"
         "Call update_plan with the full markdown when ready.\n\n"
         f"User task:\n{user_task}"
     )
 
 
-def refine_plan_prompt(failed_task: str, task_type: str, reason: str, todo: str) -> str:
+def refine_plan_prompt(
+    failed_task: str,
+    reason: str,
+    todo: str,
+    *,
+    task_type: str = "coding",
+) -> str:
     return (
         "The task below did not complete in the workflow outer loop. Replace ONLY "
-        "that task in the todo_list with 2-4 smaller tasks of the same type. "
+        "that task in the todo_list with 2-4 smaller steps. Each line must be "
+        "  - [ ] <description>\n"
+        f"This is a {task_type} session — keep steps appropriate for that specialist.\n"
         "Use update_plan to write the full revised todo_list.\n\n"
         f"Current todo_list:\n{todo or '(empty)'}\n\n"
-        f"Failed task [{task_type}]: {failed_task}\n\n"
+        f"Failed task: {failed_task}\n\n"
         f"What went wrong:\n{reason[:3000]}"
     )
 

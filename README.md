@@ -34,24 +34,26 @@ Two nested loops:
 
 **Today the evolver optimizes Coder and Reviewer only.** `train` reads **coder↔reviewer**
 optimizer traces (`agent-state/workflow/optimizer-traces/*.jsonl`), grades with hidden
-tests, and updates `coder` / `reviewer` guidance (legacy policy keys `l4` / `l3` are
-mirrored for compatibility). Full workflow (`eval --role pm` / `workflow`) trace
-mining is still evolving.
+tests, and updates `coder` / `reviewer` guidance. Full workflow trace mining is
+still evolving.
 
 Per-role **eval** (hidden **FAIL_TO_PASS / PASS_TO_PASS** tests, **langbridge-bench**
 specs in `evals/langbridge-bench/specs/`):
 
 ```bash
-# L4 implementer only
-uv run python -m langbridge_code.training.cli eval --role l4 --limit 5
+# Coder only
+uv run python -m langbridge_code.training.cli eval --role coder --limit 5
 
-# L3 reviewer (gold + no-fix cases per task, test-based labels)
-uv run python -m langbridge_code.training.cli eval --role l3 --limit 5
+# Reviewer (gold + no-fix cases per task, test-based labels)
+uv run python -m langbridge_code.training.cli eval --role reviewer --limit 5
 
-# Full L4 ⇄ L3 inner loop (same trace shape train uses today)
+# Full coder ⇄ reviewer inner loop (same trace shape train uses today)
 uv run python -m langbridge_code.training.cli eval --role loop --limit 5
 
-# Evolver epoch (L4/L3 policy only for now)
+# Full workflow
+uv run python -m langbridge_code.training.cli eval --role workflow --limit 5
+
+# Evolver epoch (coder/reviewer policy)
 uv run python -m langbridge_code.training.cli train --epochs 1 --batch-size 2
 ```
 
@@ -87,8 +89,6 @@ step caps, and context compaction.
 - **Reviewer** — inspects git diff + coder summary; `REVIEW_VERDICT: PASS|NEEDS_WORK|FAIL`.
 - **Presenter** — builds `.pptx` deliverables; `PRESENTER_STATUS: COMPLETE|IN_PROGRESS`.
 
-Legacy names (L4/L3/L5/PM) remain as aliases in policy and training for now.
-
 ## How it works
 
 The **Router** handles chat or kicks off a task. The **Planner** maintains the
@@ -112,7 +112,7 @@ Re-vendor with `scripts/vendor_superpowers.sh`.
 Each tool call includes a required `purpose` field: a short, user-visible sentence
 explaining why the agent is calling that tool. It feeds the live thinking line in the TUI.
 
-Each run writes readable JSON history under `agent-state/pm/session-history/`. On
+Each run writes readable JSON history under `agent-state/workflow/session-history/`. On
 startup, you can resume a previous session or start a new one.
 
 ### Living agents vs. worklogs (memory)
@@ -124,7 +124,7 @@ Worklogs are an audit/debug trail on disk, **not** the agents' working memory:
 
 - **Per-instance worklog** — `agent-state/<role>/worklog/<run>/<role>_<n>.md`
 - **Optimizer trace** — `*.optimizer_trace.jsonl` next to each session
-- **Session state** — `agent-state/pm/session-history/`, per-session `*.todo_list.md`
+- **Session state** — `agent-state/workflow/session-history/`, per-session `*.todo_list.md`
 
 ### Status tokens (machine-checkable)
 

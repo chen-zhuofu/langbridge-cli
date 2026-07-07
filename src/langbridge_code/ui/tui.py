@@ -46,13 +46,7 @@ _BUG_STATUS_RE = re.compile(r"\s*BUG_STATUS:\s*[A-Za-z]+\s*$", re.IGNORECASE)
 
 
 def strip_bug_status(text):
-    """Drop the PM's trailing BUG_STATUS control token before showing the reply.
-
-    BUG_STATUS is a loop-control token the PM appends to every round; it drives
-    pm_should_continue, not the user, so it should not surface in the chat. The
-    PM sometimes puts it on its own line and sometimes inline after the reply,
-    so we strip it from the end either way.
-    """
+    """Drop a trailing BUG_STATUS control token before showing the reply."""
     return _BUG_STATUS_RE.sub("", text.rstrip()).rstrip()
 
 try:
@@ -71,14 +65,15 @@ HELP_TEXT = """Commands:
   /sessions          open the session picker (Ctrl+R)
   /resume [n]        open the picker, or resume session number <n>
   /delete <n>        delete session number <n>
-  /approve [on|off]  approve a pending action, or toggle auto-approve
+  /approve [on|off]  approve a pending action, or toggle auto-approve (yolo)
+  /yolo [on|off]     toggle yolo mode (auto-approve all write tools)
   /deny              deny a pending action
   /pause             pause / resume the running agent
   /stop              stop the current turn
   /exit              quit
 
 Keys: Enter send · Shift+Enter newline · Ctrl+A approve · Ctrl+D deny
-      Ctrl+P pause · Ctrl+S stop · Ctrl+R sessions · Ctrl+C quit"""
+      Ctrl+Y yolo · Ctrl+P pause · Ctrl+S stop · Ctrl+R sessions · Ctrl+C quit"""
 
 
 class ChatInput(TextArea):
@@ -242,6 +237,7 @@ class LangBridgeTui(App):
     BINDINGS = [
         ("ctrl+a", "approve_pending", "Approve"),
         ("ctrl+d", "deny_pending", "Deny"),
+        ("ctrl+y", "toggle_yolo", "Yolo"),
         ("ctrl+p", "toggle_pause", "Pause"),
         ("ctrl+s", "stop", "Stop"),
         ("ctrl+r", "open_sessions", "Sessions"),
@@ -281,7 +277,19 @@ class LangBridgeTui(App):
         self.title = "LangBridge Code"
         self.theme = THEME
         self.query_one("#banner", Static).border_title = "LangBridge Code"
-        self.start_new_session()
+        self.session_logs = list_session_logs()
+        if self.session_logs:
+            self.push_screen(SessionPicker(self.session_logs), self._on_startup_session_choice)
+        else:
+            self.start_new_session()
+            self.update_status()
+            self.query_one("#input", ChatInput).focus()
+
+    def _on_startup_session_choice(self, path) -> None:
+        if path is not None:
+            self.resume_session(path)
+        else:
+            self.start_new_session()
         self.update_status()
         self.query_one("#input", ChatInput).focus()
 
@@ -373,9 +381,14 @@ class LangBridgeTui(App):
             self.cmd_delete(arg)
         elif cmd == "/approve":
             if arg in ("on", "off"):
-                self.set_always_approve(arg == "on")
+                self.set_yolo_mode(arg == "on")
             else:
                 self.action_approve_pending()
+        elif cmd == "/yolo":
+            if arg in ("on", "off"):
+                self.set_yolo_mode(arg == "on")
+            else:
+                self.action_toggle_yolo()
         elif cmd == "/deny":
             self.action_deny_pending()
         elif cmd == "/pause":
@@ -394,7 +407,7 @@ class LangBridgeTui(App):
                 fresh,
                 api_key=self.api_key,
                 model=self.model,
-                label="PM session compaction",
+                label="Workflow session compaction",
             )
             self.messages = fresh
             if result["compacted"]:
@@ -503,7 +516,7 @@ class LangBridgeTui(App):
         self.write_system(f"\u26a0 Approval needed: {summary}", style=f"bold {YELLOW}")
         if details:
             self.write_system(details, style="dim")
-        self.write_system("Ctrl+A approve \u00b7 Ctrl+D deny  (or /approve, /deny)", style="dim")
+        self.write_system("Ctrl+A approve \u00b7 Ctrl+D deny \u00b7 Ctrl+Y yolo  (or /approve, /deny, /yolo)", style="dim")
         self.state = "waiting for approval"
         self._sync_streaming_phase()
         self.update_status()
@@ -529,9 +542,24 @@ class LangBridgeTui(App):
         if self.pending_approval is not None:
             self.resolve_approval(False)
 
-    def set_always_approve(self, value):
+    def action_toggle_yolo(self) -> None:
+        self.set_yolo_mode(not self.always_approve)
+
+    def set_yolo_mode(self, value):
         self.always_approve = value
-        self.write_system(f"Auto-approve {'on' if value else 'off'}.", style="dim")
+        if value:
+            self.write_system(
+                "Yolo mode on — write tools auto-approved.",
+                style=f"bold {YELLOW}",
+            )
+            if self.pending_approval is not None:
+                self.resolve_approval(True)
+        else:
+            self.write_system("Yolo mode off — write tools need approval again.", style="dim")
+        self.update_status()
+
+    def set_always_approve(self, value):
+        self.set_yolo_mode(value)
 
     # --- pause / stop -----------------------------------------------------
 
@@ -643,8 +671,31 @@ class LangBridgeTui(App):
         self.turn_id = last_turn_id(records)
         self._log().clear()
         self.write_system(f"Resumed: {label_session(path)}", style="dim")
+        self._replay_session_records(records)
         self.update_banner()
         self.update_status()
+
+    def _replay_session_records(self, records):
+        for record in records:
+            user = record.get("user")
+            assistant = record.get("assistant", "")
+            steps = record.get("steps") or []
+            if user:
+                self.write_user(user)
+            if assistant:
+                cleaned = strip_bug_status(assistant)
+                if cleaned:
+                    self.write_assistant(cleaned)
+            elif steps:
+                self.write_system(
+                    "\u25a0 Agent was working\u2026 (interrupted mid-turn)",
+                    style=YELLOW,
+                )
+            elif user:
+                self.write_system(
+                    "\u25a0 No reply yet (turn interrupted before the agent finished)",
+                    style=YELLOW,
+                )
 
     def cmd_delete(self, arg):
         path = self._session_at(arg)
@@ -701,6 +752,8 @@ class LangBridgeTui(App):
         left.append(self.streaming_phase, style=self._state_style())
         if self.workflow_step:
             left.append(f" · {self.workflow_step}", style="dim")
+        if self.always_approve:
+            left.append(" · yolo", style=f"bold {YELLOW}")
         left.append("   ")
         left.append(self.cwd_display, style="dim")
         if self.git_branch:
@@ -748,12 +801,6 @@ def _fmt_k(n):
 
 def format_approval_request(role, tool_name, arguments):
     path = arguments.get("path")
-    if tool_name == "ask_l4_engineer":
-        task = str(arguments.get("task", "")).strip()
-        if task:
-            preview = task if len(task) <= 120 else task[:117] + "..."
-            return f"{role}: approve {tool_name}? Task: {preview}"
-        return f"{role}: approve {tool_name}?"
     if path:
         return f"{role}: approve {tool_name} on {path}?"
     return f"{role}: approve {tool_name}?"

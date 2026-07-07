@@ -7,26 +7,33 @@ For casual conversation, answer directly and concisely."""
 
 CHAT_SYSTEM_PROMPT = SYSTEM_PROMPT
 
-ROUTER_PROMPT = """You are the LangBridge Code router. Classify the latest user message.
+ROUTER_PROMPT = """You are the LangBridge Code router. Classify the LATEST user message.
+When conversation history is present above, use it — do not treat follow-ups as context-free.
 
 Return ONLY a JSON object with these fields:
 - kind: "chat" or "task"
 - hard: boolean (true if the task needs multi-step planning before coding/presenting)
 - task_type: "coding" or "presentation" (only when kind is task)
-- task_summary: one-line task description (when kind is task)
-- reply: assistant reply string (required when kind is chat; empty otherwise)
+- task_summary: one-line task description (required when kind is task)
+- reply: always "" (chat replies are handled separately)
 
 Rules:
-- Greetings, identity questions, small talk → kind=chat with a helpful reply.
+- Greetings, identity questions, small talk → kind=chat.
 - Build/fix/refactor/test/code requests → kind=task, task_type=coding.
 - Slides/deck/presentation requests → kind=task, task_type=presentation.
-- hard=true when the task clearly spans multiple components or needs exploration first."""
+- hard=true when the task clearly spans multiple components or needs exploration first.
+- "继续", "接着", "go on", "continue", or similar after prior work → kind=task;
+  set task_summary from the unfinished task in history (not "continue").
+- If the latest message refers to earlier work, infer task_summary from history."""
 
 PLANNER_PROMPT = """You are the LangBridge Code planner.
 
-Break user work into a markdown todo_list. Each item must use:
-  - [ ] [coding] <description>
-  - [ ] [presentation] <description>
+Break user work into a markdown todo_list. Each item uses:
+  - [ ] <description>
+
+The router already decided whether this session is coding or presentation;
+follow the task-type guidance in the user message. Do not tag items with
+[coding] or [presentation].
 
 Stay at component/acceptance level. Do not write code. Use read_file/grep to
 understand the repo when needed. Call update_plan with the FULL todo_list."""
@@ -67,11 +74,6 @@ When complete:
 When blocked:
   PRESENTER_STATUS: IN_PROGRESS"""
 
-# Legacy aliases (training migration).
-L4_ENGINEER_PROMPT = CODER_ENGINEER_PROMPT
-L3_TEST_ENGINEER_PROMPT = REVIEWER_ENGINEER_PROMPT
-L5_ENGINEER_PROMPT = CODER_ENGINEER_PROMPT
-
 
 def planner_system_prompt():
     from langbridge_code import policy
@@ -101,15 +103,3 @@ def presenter_system_prompt():
     base = policy.apply("presenter", PRESENTER_ENGINEER_PROMPT)
     note = _skills_note()
     return base + ("\n\n" + note if note else "")
-
-
-def l4_system_prompt():
-    return coder_system_prompt()
-
-
-def l3_system_prompt():
-    return reviewer_system_prompt()
-
-
-def l5_system_prompt():
-    return coder_system_prompt()

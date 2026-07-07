@@ -5,14 +5,14 @@ from dataclasses import dataclass
 from langbridge_code.tools.plan import read_todo_list, update_plan
 
 _TASK_LINE = re.compile(
-    r"^\s*-\s*\[(?P<done>[ xX])\]\s*\[(?P<kind>coding|presentation)\]\s*(?P<text>.+?)\s*$"
+    r"^\s*-\s*\[(?P<done>[ xX])\]\s*(?:\[(?:coding|presentation)\]\s*)?(?P<text>.+?)\s*$",
+    re.IGNORECASE,
 )
 
 
 @dataclass
 class TodoTask:
     description: str
-    task_type: str  # coding | presentation
     done: bool = False
     note: str = ""
 
@@ -29,7 +29,6 @@ def parse_todo_list(content: str) -> list[TodoTask]:
         if match:
             current = TodoTask(
                 description=match.group("text").strip(),
-                task_type=match.group("kind").strip().lower(),
                 done=match.group("done").strip().lower() == "x",
             )
             tasks.append(current)
@@ -43,7 +42,7 @@ def render_todo_list(tasks: list[TodoTask], title: str = "Todo") -> str:
     lines = [f"# {title}", ""]
     for task in tasks:
         mark = "x" if task.done else " "
-        lines.append(f"- [{mark}] [{task.task_type}] {task.description}")
+        lines.append(f"- [{mark}] {task.description}")
         if task.note:
             lines.append(f"  note: {task.note}")
     return "\n".join(lines).strip() + "\n"
@@ -72,9 +71,7 @@ def unfinished_count(tasks: list[TodoTask]) -> int:
 
 def mark_done(tasks: list[TodoTask], target: TodoTask) -> None:
     for task in tasks:
-        if task is target or (
-            task.description == target.description and task.task_type == target.task_type
-        ):
+        if task is target or task.description == target.description:
             task.done = True
             return
 
@@ -83,7 +80,7 @@ def replace_task(tasks: list[TodoTask], target: TodoTask, replacements: list[Tod
     out: list[TodoTask] = []
     replaced = False
     for task in tasks:
-        if not replaced and task.description == target.description and task.task_type == target.task_type:
+        if not replaced and task.description == target.description:
             out.extend(replacements)
             replaced = True
             continue
@@ -93,5 +90,5 @@ def replace_task(tasks: list[TodoTask], target: TodoTask, replacements: list[Tod
     return out
 
 
-def single_task(description: str, task_type: str = "coding") -> list[TodoTask]:
-    return [TodoTask(description=description.strip(), task_type=task_type)]
+def single_task(description: str) -> list[TodoTask]:
+    return [TodoTask(description=description.strip())]

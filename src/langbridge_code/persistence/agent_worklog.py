@@ -1,14 +1,11 @@
 """Per-agent worklog: each agent instance's own always-on trace of what it did.
 
-For every agent (PM, L3, L4, L5) we append a human-readable record of its
-reasoning, the tool calls it made (action), and what came back (observation),
-plus what it received and its final report. It is an audit/debug record, never
-read back by an agent.
+For every agent we append a human-readable record of its reasoning, the tool calls
+it made (action), and what came back (observation), plus what it received and its
+final report. It is an audit/debug record, never read back by an agent.
 
-Each distinct agent instance gets its OWN file, so traces never pile together:
-one L4<->L3 review can spin up several L3s (the main reviewer, plus fresh jurors)
-and each PM round is a fresh, memoryless PM -- every one writes to a separate
-file. Files are grouped per run: agent-state/<role>/worklog/<run>/<role>_<n>.md.
+Each distinct agent instance gets its OWN file. Files are grouped per run:
+agent-state/<role>/worklog/<run>/<role>_<n>.md.
 
 This is distinct from:
   - the optimizer trace JSONL (workflow/optimizer_trace.py), and
@@ -24,15 +21,10 @@ from langbridge_code.llm.tool_schema import TOOL_PURPOSE_ARGUMENT
 
 # label -> (config dir attribute, file-name prefix)
 _WORKLOG_FILE_BY_LABEL = {
-    "PM agent": ("PM_WORKLOG_DIR", "pm"),
     "Planner": ("PLANNER_WORKLOG_DIR", "planner"),
     "Presenter": ("PRESENTER_WORKLOG_DIR", "presenter"),
     "Coder": ("CODER_WORKLOG_DIR", "coder"),
     "Reviewer": ("REVIEWER_WORKLOG_DIR", "reviewer"),
-    # Legacy labels (training / compat)
-    "L3 test engineer": ("REVIEWER_WORKLOG_DIR", "reviewer"),
-    "L4 engineer": ("CODER_WORKLOG_DIR", "coder"),
-    "L5 engineer": ("CODER_WORKLOG_DIR", "coder"),
 }
 
 # (run, label) -> count of instances handed out so far. Resets naturally per run
@@ -71,10 +63,9 @@ def worklog_path(run_log_path, label, instance_id=None):
 
 
 def write_worklog_received(run_log_path, label, instance_id, turn_id, text):
-    # The incoming message this agent was handed (the user task for the PM, or the
-    # other side's report/feedback for a specialist). Logged so each worklog reads
-    # as a full exchange — what it received, then what it did about it — not just
-    # the agent's own half.
+    # The incoming message this agent was handed (user task or review context).
+    # Logged so each worklog reads as a full exchange — what it received, then
+    # what it did about it — not just the agent's own half.
     path = worklog_path(run_log_path, label, instance_id)
     if path is None:
         return

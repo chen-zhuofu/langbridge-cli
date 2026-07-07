@@ -1,5 +1,5 @@
 from langbridge_code.agents import limits
-from langbridge_code.agents.agent import run_l4_component
+from langbridge_code.agents.agent import run_coder_component
 from langbridge_code.agents.limits import over_context_budget, over_time_budget
 from langbridge_code.agents.multi_agent import run_specialist_agent
 from langbridge_code.workflow.run import run_workflow
@@ -71,12 +71,12 @@ def test_workflow_stops_on_time_budget(tmp_path, monkeypatch):
     assert "could not complete" in reply.lower() or "stopped" in reply.lower()
 
 
-def test_l4_compat_stops_on_time_budget(monkeypatch):
+def test_coder_stops_on_time_budget(monkeypatch):
     monkeypatch.setattr(
         "langbridge_code.agents.agent.run_coder_reviewer_loop",
         lambda *args, **kwargs: (False, "Coder/reviewer loop timed out."),
     )
 
-    output = run_l4_component("k", "m", {"task": "t", "context": "c"})
+    output = run_coder_component("k", "m", {"task": "t", "context": "c"})
 
     assert "WORKFLOW_REVIEW_STATUS: NEEDS_WORK" in output

@@ -6,7 +6,7 @@ the agent gets a problem statement and the repo at the commit *before* the fix;
 hidden tests decide if the patch is correct. Tasks include **bug fixes** and
 **feature implementations** (`task_kind: "feature"` in specs).
 
-Pair with **`evals/swe-bench/`** (public HuggingFace SWE-bench for e2e L4 eval).
+Pair with **`evals/swe-bench/`** (public HuggingFace SWE-bench for e2e coder eval).
 
 ## On-disk layout (work-trial style)
 
@@ -27,7 +27,7 @@ Training eval/train reads **`specs/`** by default (**27 active** tasks — see
 `excluded.json`):
 
 ```bash
-uv run python -m langbridge_code.training.cli eval --role l3 --limit 5
+uv run python -m langbridge_code.training.cli eval --role reviewer --limit 5
 # same as --source langbridge-bench (swebench is a backward-compat alias)
 ```
 
@@ -98,7 +98,7 @@ retry.
 
 Options: `--mode {goal,prompt}`, `--model` (kimi `-m` alias), `--kimi-bin`, `--workers`,
 `--timeout`, `--limit`. Results: `out/kimi_code_run_summary.json`,
-`out/kimi_code_artifacts/<task_id>/`, and `training/results/l4/` (dataset
+`out/kimi_code_artifacts/<task_id>/`, and `training/results/coder/` (dataset
 `langbridge-bench-kimi-code`).
 
 ### Parallel Docker eval (langbridge agents)
@@ -110,7 +110,7 @@ The host `training.cli eval` runner is **serial**. For parallel, isolated runs
 uv run python evals/langbridge-bench/run_eval_docker.py --role loop --workers 4 --limit 5
 ```
 
-Options: `--role {loop,l4,l5,pm}`, `--workers`, `--limit`, `--model`, `--timeout`,
+Options: `--role {loop,coder,workflow}`, `--workers`, `--limit`, `--model`, `--timeout`,
 `--out`. Results land in `evals/langbridge-bench/out/docker_run_summary.json` and
 `training/results/`.
 

@@ -1,7 +1,7 @@
 """Session message reconstruction and context compaction.
 
-Rebuilds PM conversation history from session logs, and compacts live message
-lists (PM loop or L4/L5/L3 specialist loops) with one shared strategy:
+Rebuilds conversation history from session logs, and compacts live message
+lists (workflow or specialist loops) with one shared strategy:
 
 1. Tool result clearing — older tool rounds become one-line [cleared] metadata,
    except the last N read_file outputs (kept in place).
@@ -43,6 +43,29 @@ Omit or shorten heavily:
 - Redundant exploration and repeated reads
 
 Return a concise bullet-list summary only. No preamble."""
+
+
+# --- chat history for router / chat replies ------------------------------------
+
+
+def recent_chat_turns(messages, *, max_turns=20, max_chars=12000):
+    """Extract recent user/assistant turns, skipping system prompts and tool items."""
+    turns = []
+    for message in messages:
+        role = message.get("role")
+        if role not in {"user", "assistant"}:
+            continue
+        content = str(message.get("content", "")).strip()
+        if not content:
+            continue
+        turns.append({"role": role, "content": content})
+
+    if len(turns) > max_turns:
+        turns = turns[-max_turns:]
+
+    while turns and sum(len(turn["content"]) for turn in turns) > max_chars:
+        turns.pop(0)
+    return turns
 
 
 # --- session log reconstruction ------------------------------------------------
@@ -243,9 +266,6 @@ def cleared_tool_summary(name: str, arguments, raw_output: str) -> str:
     if name == "read_skill":
         skill = args.get("name", "?")
         return f"{CLEARED_PREFIX} read_skill({skill}): content cleared; call read_skill again if needed."
-    if name in {"ask_l4_engineer", "ask_l5_engineer"}:
-        snippet = truncate_text(output.replace("\n", " "), 200)
-        return f"{CLEARED_PREFIX} {name}(…): {snippet}"
 
     snippet = truncate_text(output.replace("\n", " "), STALE_TOOL_OUTPUT_CHARS)
     arg_text = truncate_text(json.dumps(args, ensure_ascii=False), 120)
