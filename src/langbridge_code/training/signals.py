@@ -1,4 +1,4 @@
-"""signals.py — turn raw loop traces into the signals the evolver learns from.
+"""signals.py — turn raw loop traces into the signals the trainer learns from.
 
 A loop trace is the record of one inner coder↔reviewer loop:
 
@@ -21,7 +21,7 @@ mapped onto coder and reviewer:
   - responsiveness : mechanical — after reviewer asks for changes, did the diff change?
   - alignment      : LLM-judged — did the change actually ADDRESS the ask?
   - calibration    : was the reviewer's final verdict right vs ground truth (or jury)?
-  - batch patterns : systemic issues recurring across a batch (what the evolver
+  - batch patterns : systemic issues recurring across a batch (what the trainer
                      should fix in the BASE prompt, not one-offs).
 
 All functions are pure given their inputs; alignment takes an injected `judge`

@@ -1,10 +1,10 @@
-from langbridge_code.agents import limits
-from langbridge_code.agents.agent import run_coder_component
-from langbridge_code.agents.limits import over_context_budget, over_time_budget
-from langbridge_code.agents.multi_agent import run_specialist_agent
-from langbridge_code.workflow.run import run_workflow
+from langbridge_code.agents.common import limits
+from langbridge_code.tools.agent_worker_reviewer import run_worker_component
+from langbridge_code.agents.common.limits import over_context_budget, over_time_budget
+from langbridge_code.tools.agent_worker_reviewer import WorkerSession, ReviewerSession
+from langbridge_code.agents.main_agent import run_agent_turn
 
-READY = "CODER_STATUS: READY_FOR_REVIEW\nSummary: implemented"
+READY = "WORKER_STATUS: READY_FOR_REVIEW\nSummary: implemented"
 
 
 def test_over_time_budget_uses_elapsed(monkeypatch):
@@ -29,54 +29,73 @@ def test_over_context_budget_compares_estimated_tokens():
 
 
 def test_specialist_stops_on_context_budget(monkeypatch):
-    def fake_response(api_key, model, messages, tool_schemas, label):
+    def fake_response(api_key, model, messages, tool_schemas, label, **kwargs):
         raise AssertionError("model should not be called once the context budget is gone")
 
-    monkeypatch.setattr("langbridge_code.agents.multi_agent.create_specialist_response", fake_response)
-    monkeypatch.setattr("langbridge_code.agents.multi_agent.MAX_SPECIALIST_CONTEXT_TOKENS", 1)
+    monkeypatch.setattr("langbridge_code.tools.agent_worker_reviewer.create_model_response", fake_response)
+    monkeypatch.setattr("langbridge_code.context.common.budget.context_budget_tokens", lambda model, fraction=None: 1)
 
-    report = run_specialist_agent("k", "m", "system", "user", [], {}, "Coder")
+    session = WorkerSession("k", "m", [], {})
+    session.messages.append({"role": "user", "content": "x" * 10_000})
+    report = session.send("user")
 
-    assert report.startswith("CODER_STATUS: IN_PROGRESS")
+    assert report.startswith("WORKER_STATUS: IN_PROGRESS")
     assert "exceeded the context budget" in report
 
 
 def test_specialist_stops_on_time_budget(monkeypatch):
-    def fake_response(api_key, model, messages, tool_schemas, label):
+    def fake_response(api_key, model, messages, tool_schemas, label, **kwargs):
         raise AssertionError("model should not be called once the time budget is gone")
 
-    monkeypatch.setattr("langbridge_code.agents.multi_agent.create_specialist_response", fake_response)
-    monkeypatch.setattr("langbridge_code.agents.multi_agent.MAX_SPECIALIST_SECONDS", 0)
+    monkeypatch.setattr("langbridge_code.tools.agent_worker_reviewer.create_model_response", fake_response)
+    monkeypatch.setattr("langbridge_code.tools.agent_worker_reviewer.MAX_REVIEWER_SECONDS", 0)
 
-    report = run_specialist_agent("k", "m", "system", "user", [], {}, "Reviewer")
+    session = ReviewerSession("k", "m", [], {})
+    report = session.send("user")
 
-    assert "ran out of time" in report
+    assert "out of time" in report
 
 
 def test_workflow_stops_on_time_budget(tmp_path, monkeypatch):
-    monkeypatch.setattr("langbridge_code.workflow.run.MAX_WORKFLOW_SECONDS", 0)
+    run_log = tmp_path / "run.json"
+
+    class ExecSession:
+        def __init__(self, *args, **kwargs):
+            self.messages = kwargs.get("messages")
+
+        def run_turn(self, prompt, **kwargs):
+            from langbridge_code.tools.agent_worker_reviewer import build_agent_worker_tool
+
+            agent_worker = build_agent_worker_tool(
+                api_key="k",
+                model="m",
+                run_log_path=run_log,
+                turn_id=1,
+                messages=self.messages or [],
+                target=prompt,
+            )
+            return agent_worker(
+                prompt="Do work",
+                description="run coding",
+            )
+
+    monkeypatch.setattr("langbridge_code.agents.main_agent.MainAgentSession", ExecSession)
     monkeypatch.setattr(
-        "langbridge_code.workflow.run.route",
-        lambda *args, **kwargs: {
-            "kind": "task",
-            "reply": "",
-            "hard": False,
-            "task_type": "coding",
-            "task_summary": "Do work",
-        },
+        "langbridge_code.tools.agent_worker_reviewer.run_worker_reviewer_loop",
+        lambda *args, **kwargs: (False, "Worker/reviewer loop timed out."),
     )
 
-    reply = run_workflow("k", "m", "hi", tmp_path / "run.json", 1, print_reply=False)
+    reply = run_agent_turn("k", "m", "hi", run_log, 1, print_reply=False)
 
-    assert "could not complete" in reply.lower() or "stopped" in reply.lower()
+    assert "stopped" in reply.lower()
 
 
 def test_coder_stops_on_time_budget(monkeypatch):
     monkeypatch.setattr(
-        "langbridge_code.agents.agent.run_coder_reviewer_loop",
+        "langbridge_code.tools.agent_worker_reviewer.run_worker_reviewer_loop",
         lambda *args, **kwargs: (False, "Coder/reviewer loop timed out."),
     )
 
-    output = run_coder_component("k", "m", {"task": "t", "context": "c"})
+    output = run_worker_component("k", "m", {"task": "t", "context": "c"})
 
     assert "WORKFLOW_REVIEW_STATUS: NEEDS_WORK" in output

@@ -7,6 +7,8 @@ from langbridge_code.settings import (
     MAX_EXECUTION_OUTPUT_CHARS,
     MAX_EXECUTION_TIMEOUT_SECONDS,
 )
+from langbridge_code.tools.common.purpose import PURPOSE_PARAMETER
+from langbridge_code.agents.common.workspace import get_workspace_root
 
 WORKSPACE_ROOT = Path.cwd().resolve()
 
@@ -17,11 +19,14 @@ TOOL_SCHEMAS = [
         "description": (
             "Run a non-interactive shell command under the current workspace "
             "(via bash -c). Use for installs (e.g. uv add pytest), builds, "
-            "git, and one-off scripts. Pipes and && are allowed."
+            "git (status, log, branch), and one-off scripts. "
+            "Main agent: inspect git state; delegate merges to agent_worker. "
+            "Pipes and && are allowed."
         ),
         "parameters": {
             "type": "object",
             "properties": {
+                "purpose": PURPOSE_PARAMETER,
                 "command": {
                     "type": "string",
                     "description": "Shell command to run, e.g. 'uv add pytest' or 'python -m pytest tests/ -q'.",
@@ -37,7 +42,7 @@ TOOL_SCHEMAS = [
                     "default": DEFAULT_EXECUTION_TIMEOUT_SECONDS,
                 },
             },
-            "required": ["command"],
+            "required": ["purpose", "command"],
             "additionalProperties": False,
         },
     }
@@ -55,9 +60,9 @@ def tool(name):
 
 
 def resolve_workspace_path(path):
-    target = (WORKSPACE_ROOT / path).resolve()
+    target = (get_workspace_root() / path).resolve()
     try:
-        target.relative_to(WORKSPACE_ROOT)
+        target.relative_to(get_workspace_root())
     except ValueError:
         raise ValueError("Path must stay inside the current workspace")
     return target
@@ -98,7 +103,7 @@ def bash(command, cwd=".", timeout_seconds=DEFAULT_EXECUTION_TIMEOUT_SECONDS):
     return json.dumps(
         {
             "command": command,
-            "cwd": str(target_cwd.relative_to(WORKSPACE_ROOT)),
+            "cwd": str(target_cwd.relative_to(get_workspace_root())),
             "exit_code": exit_code,
             "timed_out": timed_out,
             "truncated": truncated,

@@ -73,13 +73,22 @@ def _path_override(env_name, config_value, default):
     return default
 
 
+def _env_bool(env_name, default: bool) -> bool:
+    raw = os.environ.get(env_name)
+    if raw is None:
+        return bool(default)
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _bind(cfg):
     agent = cfg["agent"]
+    goal = cfg.get("goal", {})
     context = cfg["context"]
     fs = cfg["tools"]["filesystem"]
     execution = cfg["tools"]["execution"]
     testing = cfg["tools"]["testing"]
     web = cfg["tools"]["web"]
+    browser = cfg["tools"].get("browser", {})
     debug = cfg["tools"]["debug"]
     training = cfg["training"]
     paths = cfg.get("paths", {})
@@ -89,33 +98,114 @@ def _bind(cfg):
         "DEFAULT_MODEL": os.environ.get("LANGBRIDGE_MODEL", cfg["model"]),
         "API_PROVIDER": os.environ.get("LANGBRIDGE_API_PROVIDER", api.get("provider", "openai")),
         "API_BASE_URL": os.environ.get("LANGBRIDGE_API_BASE_URL", api.get("base_url", "")),
+        "API_TIMEOUT_SECONDS": float(
+            os.environ.get("LANGBRIDGE_API_TIMEOUT_SECONDS", api.get("timeout_seconds", 120))
+        ),
+        "API_MAX_RETRIES": int(
+            os.environ.get("LANGBRIDGE_API_MAX_RETRIES", api.get("max_retries", 2))
+        ),
+        "API_STREAMING_ENABLED": _env_bool(
+            "LANGBRIDGE_API_STREAMING_ENABLED",
+            api.get("streaming_enabled", True),
+        ),
         "DEFAULT_MAX_GUIDANCE": cfg["max_guidance"],
         "MAX_AGENT_STEPS": agent["max_agent_steps"],
-        "MAX_SPECIALIST_AGENT_STEPS": agent["max_specialist_agent_steps"],
-        "MAX_SPECIALIST_SECONDS": agent["max_specialist_seconds"],
+        "MAX_AGENT_SECONDS": agent.get("max_agent_seconds", 3600),
+        "MAX_EXPLORER_STEPS": agent.get(
+            "max_explorer_steps",
+            agent.get("max_specialist_agent_steps", 30),
+        ),
+        "MAX_EXPLORER_SECONDS": agent.get(
+            "max_explorer_seconds",
+            agent.get("max_specialist_seconds", 900),
+        ),
+        "MAX_WORKER_STEPS": agent.get(
+            "max_worker_steps",
+            agent.get("max_specialist_agent_steps", 30),
+        ),
+        "MAX_WORKER_SECONDS": agent.get(
+            "max_worker_seconds",
+            agent.get("max_specialist_seconds", 900),
+        ),
+        "MAX_REVIEWER_STEPS": agent.get(
+            "max_reviewer_steps",
+            agent.get("max_specialist_agent_steps", 30),
+        ),
+        "MAX_REVIEWER_SECONDS": agent.get(
+            "max_reviewer_seconds",
+            agent.get("max_specialist_seconds", 900),
+        ),
         "MAX_WORKFLOW_SECONDS": agent.get("max_workflow_seconds", 3600),
         "MAX_PLANNER_STEPS": agent.get("max_planner_steps", 30),
         "MAX_PLANNER_SECONDS": agent.get("max_planner_seconds", 600),
-        "MAX_CODER_REVIEWER_ROUNDS": agent.get("max_coder_reviewer_rounds", 5),
-        "MAX_CODER_REVIEWER_SECONDS": agent.get("max_coder_reviewer_seconds", 1800),
-        "MAX_PRESENTER_STEPS": agent.get("max_presenter_steps", 30),
-        "MAX_PRESENTER_SECONDS": agent.get("max_presenter_seconds", 900),
+        "MAX_CODER_REVIEWER_ROUNDS": agent.get(
+            "max_worker_reviewer_steps",
+            agent.get("max_worker_reviewer_rounds", agent.get("max_coder_reviewer_rounds", agent.get("max_agent_steps", 50))),
+        ),
+        "MAX_WORKER_REVIEWER_STEPS": agent.get(
+            "max_worker_reviewer_steps",
+            agent.get("max_worker_reviewer_rounds", agent.get("max_agent_steps", 50)),
+        ),
+        "MAX_WORKER_REVIEWER_ROUNDS": agent.get(
+            "max_worker_reviewer_steps",
+            agent.get("max_worker_reviewer_rounds", agent.get("max_coder_reviewer_rounds", agent.get("max_agent_steps", 50))),
+        ),
+        "MAX_CODER_REVIEWER_SECONDS": agent.get("max_worker_reviewer_seconds", agent.get("max_coder_reviewer_seconds", 1800)),
+        "MAX_WORKER_REVIEWER_SECONDS": agent.get("max_worker_reviewer_seconds", agent.get("max_coder_reviewer_seconds", 1800)),
         "WORKFLOW_OUTER_MULTIPLIER": agent.get("workflow_outer_multiplier", 2),
-        "MAX_AGENT_SECONDS": agent.get("max_workflow_seconds", 3600),
-        "MAX_AGENT_CONTEXT_TOKENS": context["max_agent_context_tokens"],
-        "MAX_SPECIALIST_CONTEXT_TOKENS": context["max_specialist_context_tokens"],
-        "MAX_TOOL_SUMMARY_OUTPUT_CHARS": context["max_tool_summary_output_chars"],
+        "MAX_PARALLEL_TOOL_CALLS": int(
+            os.environ.get("LANGBRIDGE_MAX_PARALLEL_TOOL_CALLS", agent.get("max_parallel_tool_calls", 4))
+        ),
+        "MAX_PARALLEL_CODERS": int(
+            os.environ.get(
+                "LANGBRIDGE_MAX_PARALLEL_CODERS",
+                agent.get("max_parallel_workers", agent.get("max_parallel_coders", 2)),
+            )
+        ),
+        "MAX_PARALLEL_WORKERS": int(
+            os.environ.get(
+                "LANGBRIDGE_MAX_PARALLEL_WORKERS",
+                agent.get("max_parallel_workers", agent.get("max_parallel_coders", 2)),
+            )
+        ),
+        "PARALLEL_AGENTS_ENABLED": _env_bool(
+            "LANGBRIDGE_PARALLEL_AGENTS_ENABLED",
+            agent.get("parallel_agents_enabled", True),
+        ),
+        "GOAL_DEFAULT_MAX_TURNS": int(
+            os.environ.get("LANGBRIDGE_GOAL_DEFAULT_MAX_TURNS", goal.get("default_max_turns", 20))
+        ),
+        "GOAL_EVAL_INPUT_CHARS": int(
+            os.environ.get("LANGBRIDGE_GOAL_EVAL_INPUT_CHARS", goal.get("eval_input_chars", 12000))
+        ),
+        "GOAL_EVALUATOR_MAX_STEPS": int(
+            os.environ.get(
+                "LANGBRIDGE_GOAL_EVALUATOR_MAX_STEPS",
+                goal.get("evaluator_max_steps", 5),
+            )
+        ),
+        "CONTEXT_WINDOW_MAX_FRACTION": float(
+            os.environ.get(
+                "LANGBRIDGE_CONTEXT_WINDOW_MAX_FRACTION",
+                context.get("context_window_max_fraction", 0.4),
+            )
+        ),
+        "DEFAULT_CONTEXT_WINDOW_TOKENS": int(
+            context.get("default_context_window_tokens", 128000)
+        ),
+        "MODEL_CONTEXT_WINDOWS": context.get("model_context_windows", {}),
         "MAX_SESSION_CHOICES": context["max_session_choices"],
         "MAX_SESSION_SUMMARY_INPUT_CHARS": context["max_session_summary_input_chars"],
-        "COMPACT_WHEN_TOKENS_OVER": context["compact_when_tokens_over"],
-        "RECENT_CONTEXT_TOKENS": context["recent_context_tokens"],
-        "SUMMARY_TARGET_CHARS": context["summary_target_chars"],
-        "STALE_TOOL_OUTPUT_CHARS": context["stale_tool_output_chars"],
-        "COMPACT_TOOL_STEPS_KEEP": context.get("compact_tool_steps_keep", 2),
-        "COMPACT_RECENT_FILES_KEEP": context.get("compact_recent_files_keep", 5),
-        "COMPACT_LOOP_FRACTION": context.get("compact_loop_fraction", 0.5),
-        "COMPACT_USE_LLM": context.get("compact_use_llm", True),
-        "COMPACT_LLM_INPUT_CHARS": context.get("compact_llm_input_chars", 24000),
+        "STRUCTURE_MIN_RAW_KEEP": int(context.get("structure_min_raw_keep", 10)),
+        "STRUCTURE_BATCH": int(context.get("structure_batch", 10)),
+        "STRUCTURE_COMPACT_FRACTION": float(context.get("structure_compact_fraction", 0.3)),
+        "STRUCTURE_USE_LLM": context.get("structure_use_llm", True),
+        "STRUCTURE_NOTE_TARGET_CHARS": int(context.get("structure_note_target_chars", 12000)),
+        "STRUCTURE_PROSE_TARGET_CHARS": int(context.get("structure_prose_target_chars", 16000)),
+        "CONTEXT_DEBUG_PERSIST": _env_bool(
+            "LANGBRIDGE_CONTEXT_DEBUG_PERSIST",
+            context.get("context_debug_persist", True),
+        ),
         "MAX_FILE_BYTES": fs["max_file_bytes"],
         "MAX_SEARCH_FILE_BYTES": fs["max_search_file_bytes"],
         "MAX_EXECUTION_OUTPUT_CHARS": execution["max_output_chars"],
@@ -127,6 +217,10 @@ def _bind(cfg):
         "DEFAULT_WEB_TIMEOUT_SECONDS": web["default_timeout_seconds"],
         "MAX_WEB_TIMEOUT_SECONDS": web["max_timeout_seconds"],
         "MAX_WEBPAGE_CHARS": web["max_webpage_chars"],
+        "BROWSER_DEFAULT_TIMEOUT_SECONDS": browser.get("default_timeout_seconds", 30),
+        "BROWSER_MAX_TIMEOUT_SECONDS": browser.get("max_timeout_seconds", 120),
+        "BROWSER_MAX_CONTENT_CHARS": browser.get("max_content_chars", 20000),
+        "BROWSER_WAIT_AFTER_LOAD_MS": int(browser.get("wait_after_load_ms", 1000)),
         "DEFAULT_DEBUG_MAX_CHARS": debug["default_max_chars"],
         "TRAIN_DEFAULT_EPOCHS": training["default_epochs"],
         "TRAIN_DEFAULT_BATCH_SIZE": training["default_batch_size"],
@@ -145,15 +239,15 @@ def _bind(cfg):
     globals().update({
         "WORKSPACE_ROOT": workspace_root,
         "AGENT_STATE_DIR": agent_state_dir,
-        "WORKFLOW_STATE_DIR": workflow_state_dir,
-        "CODER_STATE_DIR": agent_state_dir / "coder",
-        "REVIEWER_STATE_DIR": agent_state_dir / "reviewer",
-        "PLANNER_STATE_DIR": agent_state_dir / "planner",
-        "PRESENTER_STATE_DIR": agent_state_dir / "presenter",
+        "ARTIFACTS_DIR": _path_override(
+            "LANGBRIDGE_ARTIFACTS_DIR",
+            paths.get("artifacts_dir"),
+            workspace_root / "artifacts",
+        ),
         "RUNS_DIR": _path_override(
             "LANGBRIDGE_RUNS_DIR",
-            paths.get("runs_dir"),
-            workflow_state_dir / "session-history",
+            paths.get("runs_dir") or paths.get("artifacts_dir"),
+            workspace_root / "artifacts",
         ),
         "TODO_LIST_PATH": _path_override(
             "LANGBRIDGE_TODO_LIST_PATH",
@@ -161,10 +255,10 @@ def _bind(cfg):
             workflow_state_dir / "todo_list.md",
         ),
         "WORKFLOW_WORKLOG_DIR": workflow_state_dir / "worklog",
-        "CODER_WORKLOG_DIR": agent_state_dir / "coder" / "worklog",
+        "CODER_WORKLOG_DIR": agent_state_dir / "worker" / "worklog",
+        "WORKER_WORKLOG_DIR": agent_state_dir / "worker" / "worklog",
         "REVIEWER_WORKLOG_DIR": agent_state_dir / "reviewer" / "worklog",
         "PLANNER_WORKLOG_DIR": agent_state_dir / "planner" / "worklog",
-        "PRESENTER_WORKLOG_DIR": agent_state_dir / "presenter" / "worklog",
         "OPTIMIZER_TRACE_DIR": workflow_state_dir / "optimizer-traces",
     })
 

@@ -36,3 +36,6 @@ eval = [
     "datasets>=5.0.0",
     "swebench>=4.1.0",
 ]
+browser = [
+    "playwright>=1.49.0",
+]

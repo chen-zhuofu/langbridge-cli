@@ -2,6 +2,7 @@ build/
 .DS_Store
 # runtime agent state: session history, worklogs, component plans, todo_list
 agent-state/
+artifacts/
 # stray session-history dirs from older runs (RUNS_DIR now lives under agent-state/)
 session-history/
 *.egg-info/
@@ -18,7 +19,7 @@ evals/swe-bench/*.log
 evals/langbridge-bench/out/
 evals/langbridge-bench/*.jsonl
 
-# training eval/evolver run artifacts
+# training eval/trainer run artifacts
 training/results/
 training/policy/
 

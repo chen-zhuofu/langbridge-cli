@@ -1,43 +1,41 @@
-"""Workflow tests for session context and todo resume."""
+"""Workflow tests for main agent session context and todo resume."""
 
-from langbridge_code.workflow import todo as todo_mod
-from langbridge_code.workflow.run import run_workflow
+from langbridge_code.agents.main_agent import MainAgentSession, run_agent_turn
 
 
-def _write_todo(run_log_path, lines):
-    content = "# Todo\n\n" + "\n".join(lines) + "\n"
+def _write_todo(run_log_path, lines, task_type="coding"):
+    content = f"<!-- task_type: {task_type} -->\n# Todo\n\n" + "\n".join(lines) + "\n"
     run_log_path.parent.mkdir(parents=True, exist_ok=True)
     (run_log_path.parent / f"{run_log_path.stem}.todo_list.md").write_text(content, encoding="utf-8")
 
 
-def test_workflow_chat_reply_uses_history(tmp_path, monkeypatch):
+class _FakeMainSession:
+    def __init__(self, reply, *, messages=None, **kwargs):
+        self.messages = messages
+        self.reply = reply
+        self.prompts = []
+
+    def run_turn(self, prompt, **kwargs):
+        self.prompts.append(prompt)
+        return self.reply
+
+
+def test_workflow_uses_main_agent_session(tmp_path, monkeypatch):
     run_log = tmp_path / "run.json"
-    seen = {}
+    captured = {}
 
-    monkeypatch.setattr(
-        "langbridge_code.workflow.run.route",
-        lambda *args, **kwargs: {
-            "kind": "chat",
-            "reply": "",
-            "hard": False,
-            "task_type": "coding",
-            "task_summary": "",
-        },
-    )
+    def fake_session(*args, **kwargs):
+        captured["messages"] = kwargs.get("messages") or args[2]
+        return _FakeMainSession("Direct answer.", messages=captured["messages"], **kwargs)
 
-    def fake_chat_reply(_key, _model, messages, user_message, **kwargs):
-        seen["messages"] = messages
-        seen["user_message"] = user_message
-        return "Continuing our chat."
-
-    monkeypatch.setattr("langbridge_code.workflow.run._chat_reply", fake_chat_reply)
+    monkeypatch.setattr("langbridge_code.agents.main_agent.MainAgentSession", fake_session)
 
     history = [
         {"role": "system", "content": "You are LangBridge Code."},
         {"role": "user", "content": "你现在是新版了"},
         {"role": "assistant", "content": "是的，已更新。"},
     ]
-    reply = run_workflow(
+    reply = run_agent_turn(
         "key",
         "model",
         "继续吧",
@@ -47,52 +45,48 @@ def test_workflow_chat_reply_uses_history(tmp_path, monkeypatch):
         messages=history,
     )
 
-    assert reply == "Continuing our chat."
-    assert seen["user_message"] == "继续吧"
-    assert any(message.get("content") == "你现在是新版了" for message in seen["messages"])
+    assert reply == "Direct answer."
+    assert captured["messages"] is history
 
 
-def test_workflow_skips_new_todo_when_open_items_exist(tmp_path, monkeypatch):
+def test_workflow_resume_can_execute_existing_todo(tmp_path, monkeypatch):
     run_log = tmp_path / "run.json"
     _write_todo(run_log, ["- [ ] Build a web game"])
 
-    route_calls = []
-    planner_calls = []
+    class ResumeSession(_FakeMainSession):
+        def run_turn(self, prompt, **kwargs):
+            from langbridge_code.tools.agent_worker_reviewer import build_agent_worker_tool
+
+            agent_worker = build_agent_worker_tool(
+                api_key="key",
+                model="model",
+                run_log_path=run_log,
+                turn_id=1,
+                messages=self.messages or [],
+                target=prompt,
+            )
+            return agent_worker(
+                prompt="Build a web game",
+                description="run coding",
+            )
 
     monkeypatch.setattr(
-        "langbridge_code.workflow.run.route",
-        lambda *args, **kwargs: route_calls.append(kwargs) or {
-            "kind": "task",
-            "reply": "",
-            "hard": True,
-            "task_type": "coding",
-            "task_summary": "Build a web game",
-        },
+        "langbridge_code.tools.agent_worker_reviewer.run_worker_reviewer_loop",
+        lambda *args, **kwargs: (True, "Build a web game done"),
     )
     monkeypatch.setattr(
-        "langbridge_code.workflow.run.run_planner",
-        lambda *args, **kwargs: planner_calls.append(True),
-    )
-    monkeypatch.setattr(
-        "langbridge_code.workflow.run.run_coder_reviewer_loop",
-        lambda *args, **kwargs: (True, "REVIEW_VERDICT: PASS"),
+        "langbridge_code.agents.main_agent.MainAgentSession",
+        lambda *args, **kwargs: ResumeSession("", messages=kwargs.get("messages"), **kwargs),
     )
 
-    reply = run_workflow(
+    reply = run_agent_turn(
         "key",
         "model",
         "继续吧",
         run_log,
         1,
         print_reply=False,
-        messages=[
-            {"role": "system", "content": "sys"},
-            {"role": "user", "content": "帮我开发一个网页游戏吧"},
-        ],
+        messages=[{"role": "system", "content": "sys"}],
     )
 
-    assert route_calls
-    assert route_calls[0]["messages"] is not None
-    assert planner_calls == []
-    assert todo_mod.unfinished_count(todo_mod.load_tasks(run_log)) == 0
-    assert "Workflow complete" in reply
+    assert "Single-task completed" in reply

@@ -5,7 +5,7 @@ Two parallel benchmarks live here:
 | Directory | What it is |
 | --- | --- |
 | **`swe-bench/`** | Public [SWE-bench](https://www.swebench.com/) (HuggingFace Lite / Verified / Pro). End-to-end coder eval: generate predictions, then grade with the official Docker harness. See `swe-bench/README.md`. |
-| **`langbridge-bench/`** | Self-built benchmark from real merged GitHub PRs (pytest pipeline). One JSON per task under `instances/`, eval-ready specs under `specs/`. Used by `training` eval/train (`--source langbridge-bench`). See `langbridge-bench/README.md`. |
+| **`langbridge-bench/`** | Self-built benchmark from real merged GitHub PRs (pytest pipeline). One JSON per task under `instances/`, eval-ready specs under `specs/`. Used by `langbridge_code.eval` (`--source langbridge-bench`). See `langbridge-bench/README.md`. |
 
 Quick start:
 
@@ -14,5 +14,5 @@ Quick start:
 sg docker -c "uv run python evals/swe-bench/run_eval_docker.py --difficulty lite --count 10"
 
 # Self-built langbridge-bench (coder/reviewer/loop training eval)
-uv run python -m langbridge_code.training.cli eval --role reviewer --limit 5
+uv run python -m langbridge_code.eval.cli eval --role reviewer --limit 5
 ```

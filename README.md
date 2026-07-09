@@ -2,15 +2,16 @@
 
 <img src="assets/Langbridge_Logotype_Horizontal.svg" alt="LangBridge Code" width="360">
 
-A self-evolving coding agent with a **flat workflow** (router → planner → todo →
-coder↔reviewer). **Default model: Moonshot Kimi** (`kimi-k2.7-code`); **also
-supports OpenAI** (e.g. `gpt-5.1-codex`). Configure in `~/.langbridge-code/config.json`
+A self-evolving coding agent with a **main agent + specialist subagents** workflow.
+**Default model: Moonshot Kimi** (`kimi-k2.7-code`); **also supports OpenAI**
+(e.g. `gpt-5.1-codex`). Configure in `~/.langbridge-code/config.json`
 (legacy `~/.langbridge/` still works) or via env vars — see [Models & providers](#models--providers).
 
-LangBridge Code runs a **flat workflow** pipeline: route chat vs task, plan when needed,
-then execute todo items through a Coder↔Reviewer loop (or Presenter for slides).
-It can resume previous session history and compacts older context when the
-conversation gets long.
+LangBridge Code runs a **flat orchestration pipeline**: the **LangBridge** main agent
+decides when to chat vs delegate, calls **Planner** to build a markdown `todo_list`,
+then dispatches **one subtask at a time** to **Worker↔Reviewer** loops (or slide
+workers for decks). It compacts long context automatically and can resume prior
+sessions.
 
 Start it:
 
@@ -18,47 +19,45 @@ Start it:
 uv run langbridge-code
 ```
 
-## Evolve (self-play training)
+## Train (self-play)
 
-LangBridge Code is **self-evolving**: an outer **evolver** improves the team over many
-tasks without editing Python source — by updating a shared **policy** (per-role
-guidance bullets and evolver-written skills) that each agent folds into its
-prompt on the next run. Code lives in `src/langbridge_code/training/`.
+LangBridge Code is **self-improving**: an outer **trainer** improves the team over many
+tasks by editing agent artifacts directly — `tools/`, `skills/`, and
+`agents/system_prompt/` — with **checkpoints** under `training/checkpoints/` so you
+can restore anytime. Code lives in `src/langbridge_code/training/`.
 
 Two nested loops:
 
 - **Worker loop** (one task): Coder implements and Reviewer verifies until pass or limits.
-- **Optimizer loop** (the evolver / optimizer): across a batch of tasks, mine signals
-  from traces, propose policy changes, and **gate** them — keep a change only if
-  eval metrics improve and it does not reward-hack the reviewer.
+- **Trainer loop**: across a batch of tasks, mine signals from traces, propose file
+  edits, and **gate** them — keep a change only if eval metrics improve.
 
-**Today the evolver optimizes Coder and Reviewer only.** `train` reads **coder↔reviewer**
-optimizer traces (`agent-state/workflow/optimizer-traces/*.jsonl`), grades with hidden
-tests, and updates `coder` / `reviewer` guidance. Full workflow trace mining is
-still evolving.
+**Today `train` optimizes Coder and Reviewer primarily.** It reads **coder↔reviewer**
+optimizer traces, grades with hidden tests, and checkpoints accepted edits. Full
+workflow trace mining is still evolving.
 
 Per-role **eval** (hidden **FAIL_TO_PASS / PASS_TO_PASS** tests, **langbridge-bench**
-specs in `evals/langbridge-bench/specs/`):
+specs in `evals/langbridge-bench/specs/`). Eval lives in `src/langbridge_code/eval/`:
 
 ```bash
 # Coder only
-uv run python -m langbridge_code.training.cli eval --role coder --limit 5
+uv run python -m langbridge_code.eval.cli eval --role coder --limit 5
 
 # Reviewer (gold + no-fix cases per task, test-based labels)
-uv run python -m langbridge_code.training.cli eval --role reviewer --limit 5
+uv run python -m langbridge_code.eval.cli eval --role reviewer --limit 5
 
 # Full coder ⇄ reviewer inner loop (same trace shape train uses today)
-uv run python -m langbridge_code.training.cli eval --role loop --limit 5
+uv run python -m langbridge_code.eval.cli eval --role loop --limit 5
 
 # Full workflow
-uv run python -m langbridge_code.training.cli eval --role workflow --limit 5
+uv run python -m langbridge_code.eval.cli eval --role workflow --limit 5
 
-# Evolver epoch (coder/reviewer policy)
+# Trainer epoch (direct file edits + checkpoints)
 uv run python -m langbridge_code.training.cli train --epochs 1 --batch-size 2
 ```
 
 For a local git repo + custom specs, set `LANGBRIDGE_TARGET_REPO` and use
-`--source local`. Full design, guards, and env vars:
+`--source local`. Eval docs: `src/langbridge_code/eval/README.md`. Training docs:
 `src/langbridge_code/training/README.md`.
 
 ## Loop Engineering
@@ -70,72 +69,86 @@ model call, agents run in loops until a task is done.
 
 ```
 User prompt
-  → Router (chat reply OR task)
-  → Planner (hard tasks) OR single todo item (easy)
-  → Outer loop over todo_list
-       [coding]      → Coder ↔ Reviewer (separate sessions, git diff handoff)
-       [presentation] → Presenter (.pptx)
-       on failure    → Planner refines (splits task)
-  → Summary reply
+  → LangBridge (chat reply OR delegate)
+  → agent_planner (new / refined plan) when needed
+  → read_plan → agent_worker (one unchecked subtask per call)
+       [coding]  → Worker ↔ Reviewer (separate sessions, git diff handoff)
+       [slide]   → Worker ↔ Reviewer (.pptx / deck deliverables)
+       on pass   → check_subtask (main agent marks todo done)
+       on fail   → agent_planner refines (splits task)
+  → Summary reply (full project complete only when all todos are [x])
 ```
 
-Safety brakes: `max_workflow_seconds`, `max_coder_reviewer_rounds`, specialist
-step caps, and context compaction.
+Safety brakes: `max_workflow_seconds`, worker/reviewer step caps, context compaction,
+and optional `/goal` autonomous rounds with a Goal Evaluator.
+
 ## LangBridge Code team (workflow roles)
 
-- **Router** — classifies chat vs task (one-shot JSON).
-- **Planner** — breaks hard work into a markdown `todo_list`.
-- **Coder** — implements a coding todo item; ends with `CODER_STATUS: READY_FOR_REVIEW`.
-- **Reviewer** — inspects git diff + coder summary; `REVIEW_VERDICT: PASS|NEEDS_WORK|FAIL`.
-- **Presenter** — builds `.pptx` deliverables; `PRESENTER_STATUS: COMPLETE|IN_PROGRESS`.
+- **LangBridge** — main agent; coordinates tools and subagents; owns `read_plan` /
+  `check_subtask`; does not implement code itself.
+- **Planner** — builds or refines the markdown session plan (`update_plan`).
+- **Worker** — implements one assigned subtask; may `read_plan` for read-only context;
+  ends with `WORKER_STATUS: READY_FOR_REVIEW`.
+- **Reviewer** — inspects git diff + worker summary; `REVIEW_VERDICT: PASS|NEEDS_WORK|FAIL`.
+- **Explorer** — read-only codebase investigation (`agent_explorer`).
 
 ## How it works
 
-The **Router** handles chat or kicks off a task. The **Planner** maintains the
-`todo_list`. For each item, **Coder** and **Reviewer** run in separate sessions
-(git diff handoff, no shared worklog). **Presenter** handles slide tasks.
+The **LangBridge** main agent handles chat or kicks off multi-step work. The
+**Planner** writes the full `todo_list` (Desired end state, Success criteria, todos
+with `<!-- verify: ... -->` comments). For each unchecked item, LangBridge calls
+**agent_worker** with a **focused subtask prompt** (not the whole plan). After
+review passes, LangBridge calls **check_subtask** to mark that line `[x]` — it does
+not ask the planner to update checkboxes. When every todo is checked,
+`check_subtask` returns `all_complete=true` and LangBridge may report the project
+finished.
 
-**Planner tools:** `list_dir`, `glob`, `read_file`, `grep`, `update_plan`
+**Main agent tools:** filesystem, `bash`, `run_tests`, `read_plan`, `check_subtask`,
+`read_webpage`, `browse_webpage`, `read_skill`, plus subagent tools
+(`agent_planner`, `agent_worker`, `agent_explorer`).
 
-**Coder / Reviewer / Presenter tools:** filesystem tools, `bash`, `read_webpage`,
-`read_skill`, plus writes (`create_file`, `edit_file`, `delete_file`) for specialists.
+**Planner tools:** `list_dir`, `glob`, `read_file`, `grep`, `update_plan`, `read_skill`,
+`ask_user`.
+
+**Worker / Reviewer tools:** filesystem tools, `bash`, `run_tests`, `read_plan`
+(read-only context), `read_skill`, `agent_explorer`, plus writes (`create_file`,
+`edit_file`, `delete_file`) for workers.
 
 File tools are limited to the directory where you start LangBridge Code. Write tools
-ask for approval first (unless auto-approve is on).
+ask for approval first (unless yolo / auto-approve is on).
 
 On-demand skills: specialists see a catalog of playbooks in their prompt and can
 call `read_skill(name)` to load one. Bundled skills include Karpathy guidelines
-and vendored [Superpowers](https://github.com/obra/superpowers) (`test-driven-development`,
-`verification-before-completion`, etc.) under `src/langbridge_code/skills/superpowers/`.
-Re-vendor with `scripts/vendor_superpowers.sh`.
+and vendored [Superpowers](https://github.com/obra/superpowers) under
+`src/langbridge_code/skills/_external/superpowers/`.
 
 Each tool call includes a required `purpose` field: a short, user-visible sentence
 explaining why the agent is calling that tool. It feeds the live thinking line in the TUI.
 
-Each run writes readable JSON history under `agent-state/workflow/session-history/`. On
-startup, you can resume a previous session or start a new one.
+Each run writes session artifacts under `artifacts/session-{slug}-{timestamp}/`:
+`session.json` (chat history), `todo_list.md`, `progress.md`, and `traces/*.log`.
+User messages are persisted to `session.json` **as soon as you press Enter** (including
+queued messages while the agent is busy). On startup you can resume a previous session
+or start a new one.
 
-### Living agents vs. worklogs (memory)
+### Living agents vs. traces (memory)
 
-Within one specialist session an agent stays **alive** across tool steps. Coder and
+Within one specialist session an agent stays **alive** across tool steps. Worker and
 Reviewer are **fresh sessions** each handoff — they do not share message history.
 
-Worklogs are an audit/debug trail on disk, **not** the agents' working memory:
-
-- **Per-instance worklog** — `agent-state/<role>/worklog/<run>/<role>_<n>.md`
-- **Optimizer trace** — `*.optimizer_trace.jsonl` next to each session
-- **Session state** — `agent-state/workflow/session-history/`, per-session `*.todo_list.md`
+Cross-turn memory for LangBridge lives in `progress.md` (per-turn summaries), not in
+replayed tool traces. Worklogs are unified into per-turn **trace logs** under the
+session's `traces/` directory for audit/debug — not the agents' working memory.
 
 ### Status tokens (machine-checkable)
 
-- **Coder:** `CODER_STATUS: READY_FOR_REVIEW | IN_PROGRESS`
+- **Worker:** `WORKER_STATUS: READY_FOR_REVIEW | IN_PROGRESS`
 - **Reviewer:** `REVIEW_VERDICT: PASS | NEEDS_WORK | FAIL`
-- **Presenter:** `PRESENTER_STATUS: COMPLETE | IN_PROGRESS`
 
 ### Limits
 
-Bounded by `max_workflow_seconds`, `max_coder_reviewer_rounds`, specialist step caps,
-and context compaction. On failure the Planner can split the failed todo into smaller tasks.
+Bounded by workflow time limits, worker/reviewer step caps, and context compaction.
+On failure the Planner can split the failed todo into smaller tasks.
 
 ## Eval (benchmarks & datasets)
 
@@ -262,16 +275,27 @@ changes take effect immediately. Use `uv sync --reinstall-package langbridge-cod
 | `/resume [n]` | open the picker, or resume session number `<n>` |
 | `/delete <n>` | delete session number `<n>` |
 | `/approve [on\|off]` | approve a pending action, or toggle auto-approve |
+| `/yolo [on\|off]` | toggle yolo mode (auto-approve all write tools) |
 | `/deny` | deny a pending action |
 | `/pause` | pause / resume the running agent |
 | `/stop` | stop the current turn |
+| `/queue` | show queued messages waiting to run |
+| `/queue clear` | drop all queued messages |
+| `/goal <condition>` | work autonomously until the condition is met |
+| `/goal` | show active goal status |
+| `/goal clear` | remove the current goal |
 | `/exit` | quit |
 
-**Keys**: `Ctrl+A` approve · `Ctrl+D` deny · `Ctrl+P` pause · `Ctrl+S` stop ·
-`Ctrl+R` sessions · `Ctrl+C` quit.
+**Keys**: `Ctrl+A` approve · `Ctrl+D` deny · `Ctrl+Y` yolo · `Ctrl+P` pause ·
+`Ctrl+S` stop · `Ctrl+R` sessions · `Ctrl+C` quit.
 
 **Sessions**: `Ctrl+R` (or `/sessions`) opens a scrollable popup of saved
-sessions — move with `↑`/`↓`, `Enter` to resume, `Esc` to cancel.
+sessions — move with `↑`/`↓`, `Enter` to resume, `Esc` to cancel. Chat history
+is written to `session.json` immediately when you submit a message (including
+messages queued while the agent is busy).
+
+**Queue**: while a turn is running you can keep typing — messages are saved to
+history right away and run in order when the current turn finishes.
 
 **Pause** (soft hold): holds the agent at the next step boundary and resumes the
 same run in place. It takes effect *between* steps, so an in-flight model call or

@@ -1,4 +1,4 @@
-from langbridge_code.workflow.phases import WorkflowPhase, emit_phase
+from langbridge_code.agents.common.phases import WorkflowPhase, emit_phase
 
 
 def test_emit_phase_calls_sink():

@@ -27,7 +27,7 @@ Training eval/train reads **`specs/`** by default (**27 active** tasks — see
 `excluded.json`):
 
 ```bash
-uv run python -m langbridge_code.training.cli eval --role reviewer --limit 5
+uv run python -m langbridge_code.eval.cli eval --role reviewer --limit 5
 # same as --source langbridge-bench (swebench is a backward-compat alias)
 ```
 
@@ -103,7 +103,7 @@ Options: `--mode {goal,prompt}`, `--model` (kimi `-m` alias), `--kimi-bin`, `--w
 
 ### Parallel Docker eval (langbridge agents)
 
-The host `training.cli eval` runner is **serial**. For parallel, isolated runs
+The host `eval.cli eval` runner is **serial**. For parallel, isolated runs
 (one container per task, repo venv + pytest inside):
 
 ```bash

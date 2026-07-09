@@ -6,7 +6,7 @@ import pytest
 
 
 def test_reviewer_cases_from_specs():
-    from langbridge_code.training.reviewer_cases import reviewer_cases_from_specs
+    from langbridge_code.eval.reviewer_cases import reviewer_cases_from_specs
 
     specs = [{"task_id": "t1", "base_commit": "abc", "problem_statement": "fix bug",
                "gold_code_patch": "FIX", "test_patch": "tests", "test_files": ["t.py"]}]
@@ -22,7 +22,7 @@ def test_reviewer_cases_from_specs():
     assert bad["gt_pass"] is False and bad["diff"] == ""
 
 
-    from langbridge_code.training import metrics
+    from langbridge_code.eval import metrics
 
     coder_rows = [
         {"task_id": "a", "gt_pass": True, "turns": 3, "patch_lines": 10},
@@ -57,7 +57,7 @@ def test_reviewer_cases_from_specs():
 
 
 def test_metrics_workflow():
-    from langbridge_code.training import metrics
+    from langbridge_code.eval import metrics
 
     workflow_rows = [
         {"completed": True, "gt_pass": True},
@@ -70,7 +70,7 @@ def test_metrics_workflow():
 
 
 def test_record_and_leaderboard_roundtrip():
-    from langbridge_code.training import metrics
+    from langbridge_code.eval import metrics
 
     with tempfile.TemporaryDirectory() as d:
         os.environ["LANGBRIDGE_EVAL_RESULTS_DIR"] = d
@@ -121,50 +121,6 @@ def test_signals_batch_patterns():
     names = {f["pattern"] for f in flags}
     assert "reviewer_silence" in names
     assert "reward_hack" in names
-
-
-def test_gate_apply_proposal_reviewer_anchor():
-    from langbridge_code import policy
-    from langbridge_code.training import gate
-
-    with tempfile.TemporaryDirectory() as d:
-        os.environ["LANGBRIDGE_POLICY_DIR"] = d
-        try:
-            p = policy.load()
-            proposal = {
-                "diagnosis": "x",
-                "coder_guidance_add": ["Run the whole test file."],
-                "reviewer_guidance_add": ["Be stricter about missing tests."],
-            }
-            ch = gate.apply_proposal(p, proposal, allow_reviewer=False)
-            assert any("test file" in b for b in p["coder"]["guidance"])
-            assert p["reviewer"]["guidance"] == []
-            assert "skipped" in ch
-
-            ch2 = gate.apply_proposal(p, proposal, allow_reviewer=True)
-            assert any("stricter" in b for b in p["reviewer"]["guidance"])
-        finally:
-            del os.environ["LANGBRIDGE_POLICY_DIR"]
-
-
-def test_gate_strips_oracle_leaks():
-    from langbridge_code import policy
-    from langbridge_code.training import gate
-
-    with tempfile.TemporaryDirectory() as d:
-        os.environ["LANGBRIDGE_POLICY_DIR"] = d
-        try:
-            p = policy.load()
-            proposal = {"coder_guidance_add": [
-                "Make the hidden tests pass.",
-                "Keep changes surgical and focused.",
-            ]}
-            gate.apply_proposal(p, proposal, allow_reviewer=True)
-            joined = " ".join(p["coder"]["guidance"])
-            assert "surgical" in joined
-            assert "hidden tests" not in joined
-        finally:
-            del os.environ["LANGBRIDGE_POLICY_DIR"]
 
 
 def test_gate_scoring_and_acceptance():

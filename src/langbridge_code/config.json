@@ -2,7 +2,10 @@
   "model": "kimi-k2.7-code",
   "api": {
     "provider": "moonshot",
-    "base_url": "https://api.moonshot.ai/v1"
+    "base_url": "https://api.moonshot.ai/v1",
+    "timeout_seconds": 120,
+    "max_retries": 2,
+    "streaming_enabled": true
   },
   "api_keys": {
     "moonshot": null,
@@ -11,32 +14,41 @@
   "max_guidance": 12,
   "agent": {
     "max_agent_steps": 50,
-    "max_specialist_agent_steps": 30,
-    "max_specialist_seconds": 900,
+    "max_agent_seconds": 3600,
+    "max_explorer_steps": 30,
+    "max_explorer_seconds": 900,
+    "max_worker_steps": 30,
+    "max_worker_seconds": 900,
+    "max_reviewer_steps": 30,
+    "max_reviewer_seconds": 900,
     "max_workflow_seconds": 3600,
     "max_planner_steps": 30,
     "max_planner_seconds": 600,
-    "max_coder_reviewer_rounds": 5,
-    "max_coder_reviewer_seconds": 1800,
-    "max_presenter_steps": 30,
-    "max_presenter_seconds": 900,
-    "workflow_outer_multiplier": 2
+    "max_worker_reviewer_steps": 50,
+    "max_worker_reviewer_seconds": 1800,
+    "workflow_outer_multiplier": 2,
+    "max_parallel_tool_calls": 4,
+    "max_parallel_workers": 2,
+    "parallel_agents_enabled": false
+  },
+  "goal": {
+    "default_max_turns": 20,
+    "eval_input_chars": 12000,
+    "evaluator_max_steps": 5
   },
   "context": {
-    "max_agent_context_tokens": 120000,
-    "max_specialist_context_tokens": 120000,
-    "max_tool_summary_output_chars": 300,
+    "context_window_max_fraction": 0.4,
+    "default_context_window_tokens": 128000,
+    "model_context_windows": {},
     "max_session_choices": 10,
     "max_session_summary_input_chars": 4000,
-    "compact_when_tokens_over": 60000,
-    "recent_context_tokens": 40000,
-    "summary_target_chars": 8000,
-    "stale_tool_output_chars": 500,
-    "compact_tool_steps_keep": 2,
-    "compact_recent_files_keep": 5,
-    "compact_loop_fraction": 0.5,
-    "compact_use_llm": true,
-    "compact_llm_input_chars": 24000
+    "structure_min_raw_keep": 10,
+    "structure_batch": 10,
+    "structure_compact_fraction": 0.3,
+    "structure_use_llm": true,
+    "structure_note_target_chars": 12000,
+    "structure_prose_target_chars": 16000,
+    "context_debug_persist": true
   },
   "tools": {
     "filesystem": {
@@ -58,6 +70,12 @@
       "max_timeout_seconds": 120,
       "max_webpage_chars": 20000
     },
+    "browser": {
+      "default_timeout_seconds": 30,
+      "max_timeout_seconds": 120,
+      "max_content_chars": 20000,
+      "wait_after_load_ms": 1000
+    },
     "debug": {
       "default_max_chars": 200
     }
@@ -71,6 +89,7 @@
   },
   "paths": {
     "agent_state_dir": null,
+    "artifacts_dir": null,
     "runs_dir": null,
     "todo_list_path": null
   }

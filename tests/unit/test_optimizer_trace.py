@@ -1,15 +1,27 @@
-from langbridge_code.workflow import optimizer_trace
-from langbridge_code.workflow.optimizer_trace import (
+from langbridge_code.training import optimizer_trace
+from langbridge_code.training.optimizer_trace import (
     append_event,
     read_events,
     trace_to_loop_rounds,
     trace_to_loop_rounds_from_path,
 )
+from langbridge_code.util.trace_log import begin_trace
+
+
+def _artifact_session(tmp_path, slug="test"):
+    session_dir = tmp_path / f"session-{slug}-2026-07-09T120000"
+    session_dir.mkdir()
+    (session_dir / "traces").mkdir()
+    (session_dir / "debug").mkdir()
+    run_log = session_dir / "session.json"
+    run_log.write_text('{"summary": "", "turns": []}\n', encoding="utf-8")
+    return run_log
 
 
 def test_trace_to_loop_rounds_from_reviewer_events(tmp_path):
-    run_log = tmp_path / "session.json"
-    append_event(run_log, {"event": "coder_turn", "report": "CODER_STATUS: READY_FOR_REVIEW"})
+    run_log = _artifact_session(tmp_path)
+    begin_trace(run_log, "2026-07-09T120000.00")
+    append_event(run_log, {"event": "coder_turn", "report": "WORKER_STATUS: READY_FOR_REVIEW"})
     append_event(
         run_log,
         {"event": "reviewer_turn", "report": "REVIEW_VERDICT: NEEDS_WORK\nIssues: missing tests"},

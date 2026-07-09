@@ -1,4 +1,4 @@
-"""Orchestration tests for the eval runners and the evolver, using stub agents."""
+"""Orchestration tests for the eval runners and the trainer, using stub agents."""
 import os
 import tempfile
 
@@ -9,8 +9,25 @@ def _grade_from_diff(task_id, diff):
     return {"resolved": "FIX" in (diff or ""), "status": "graded"}
 
 
+def _sandbox_env(artifact_root, checkpoint_root):
+    os.environ["LANGBRIDGE_ARTIFACT_ROOT"] = artifact_root
+    os.environ["LANGBRIDGE_CHECKPOINT_DIR"] = checkpoint_root
+
+
+def _write_worker_prompt(root, text):
+    path = os.path.join(root, "agents", "system_prompt", "worker.py")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as handle:
+        handle.write(text)
+
+
+def _read_worker_prompt(root):
+    path = os.path.join(root, "agents", "system_prompt", "worker.py")
+    return open(path, encoding="utf-8").read()
+
+
 def test_eval_runners_with_stubs():
-    from langbridge_code.training.evals import runner
+    from langbridge_code.eval import runner
 
     specs = [{"task_id": "t1"}, {"task_id": "t2"}]
 
@@ -40,16 +57,16 @@ def test_eval_runners_with_stubs():
     assert traces[0]["labels"]["gt_pass"] is True
 
 
-def test_evolver_accepts_improving_change():
-    from langbridge_code import policy
-    from langbridge_code.training import evolver
+def test_trainer_accepts_improving_change():
+    from langbridge_code.training import checkpoint, trainer
 
-    with tempfile.TemporaryDirectory() as d:
-        os.environ["LANGBRIDGE_POLICY_DIR"] = d
+    with tempfile.TemporaryDirectory() as artifacts, tempfile.TemporaryDirectory() as checkpoints:
+        _sandbox_env(artifacts, checkpoints)
         try:
+            _write_worker_prompt(artifacts, "BASE\n")
+
             def loop_fn(spec):
-                p = policy.load()
-                learned = any("surgical fix" in b for b in p["coder"]["guidance"])
+                learned = "surgical fix" in _read_worker_prompt(artifacts).lower()
                 diff = "FIX" if learned else "noop"
                 return {
                     "task": spec["task_id"], "worker": "coder",
@@ -57,33 +74,39 @@ def test_evolver_accepts_improving_change():
                     "approved": True, "final_diff": diff,
                 }
 
-            def evolve_fn(prompt):
-                return {"diagnosis": "implementer flailing",
-                        "coder_guidance_add": ["Make a surgical fix to the failing function."]}
+            def trainer_fn(prompt):
+                content = _read_worker_prompt(artifacts).replace(
+                    "BASE", "Make a surgical fix to the failing function."
+                )
+                return {
+                    "diagnosis": "implementer flailing",
+                    "file_edits": [{"path": "agents/system_prompt/worker.py", "content": content}],
+                }
 
-            results = evolver.run(
+            results = trainer.run(
                 [{"task_id": "t1"}, {"task_id": "t2"}],
-                loop_fn=loop_fn, grade=_grade_from_diff, evolve_fn=evolve_fn,
+                loop_fn=loop_fn, grade=_grade_from_diff, trainer_fn=trainer_fn,
                 epochs=1, batch_size=2, do_gate=True, checkpoint_every="batch",
             )
             assert len(results) == 1
             res = results[0]
             assert res["accepted"] is True
             assert res["new_total"] > res["old_total"]
-            p = policy.load()
-            assert any("surgical fix" in b for b in p["coder"]["guidance"])
-            assert policy.list_checkpoints()
+            assert "surgical fix" in _read_worker_prompt(artifacts).lower()
+            assert checkpoint.list_checkpoints()
         finally:
-            del os.environ["LANGBRIDGE_POLICY_DIR"]
+            os.environ.pop("LANGBRIDGE_ARTIFACT_ROOT", None)
+            os.environ.pop("LANGBRIDGE_CHECKPOINT_DIR", None)
 
 
-def test_evolver_rolls_back_non_improving_change():
-    from langbridge_code import policy
-    from langbridge_code.training import evolver
+def test_trainer_rolls_back_non_improving_change():
+    from langbridge_code.training import trainer
 
-    with tempfile.TemporaryDirectory() as d:
-        os.environ["LANGBRIDGE_POLICY_DIR"] = d
+    with tempfile.TemporaryDirectory() as artifacts, tempfile.TemporaryDirectory() as checkpoints:
+        _sandbox_env(artifacts, checkpoints)
         try:
+            _write_worker_prompt(artifacts, "BASE\n")
+
             def loop_fn(spec):
                 return {
                     "task": spec["task_id"], "worker": "coder",
@@ -91,29 +114,38 @@ def test_evolver_rolls_back_non_improving_change():
                     "approved": True, "final_diff": "noop",
                 }
 
-            def evolve_fn(prompt):
-                return {"coder_guidance_add": ["Some guidance that does nothing useful."]}
+            def trainer_fn(prompt):
+                return {
+                    "file_edits": [
+                        {"path": "agents/system_prompt/worker.py", "content": "Some guidance.\n"}
+                    ]
+                }
 
-            results = evolver.run(
+            results = trainer.run(
                 [{"task_id": "t1"}, {"task_id": "t2"}],
-                loop_fn=loop_fn, grade=_grade_from_diff, evolve_fn=evolve_fn,
+                loop_fn=loop_fn, grade=_grade_from_diff, trainer_fn=trainer_fn,
                 epochs=1, batch_size=2, do_gate=True, checkpoint_every="batch",
             )
             res = results[0]
             assert res["accepted"] is False
-            p = policy.load()
-            assert p["coder"]["guidance"] == []
+            assert _read_worker_prompt(artifacts) == "BASE\n"
         finally:
-            del os.environ["LANGBRIDGE_POLICY_DIR"]
+            os.environ.pop("LANGBRIDGE_ARTIFACT_ROOT", None)
+            os.environ.pop("LANGBRIDGE_CHECKPOINT_DIR", None)
 
 
-def test_reviewer_guidance_needs_anchor_in_evolver():
-    from langbridge_code import policy
-    from langbridge_code.training import evolver
+def test_reviewer_edits_need_anchor_in_trainer():
+    from langbridge_code.training import trainer
 
-    with tempfile.TemporaryDirectory() as d:
-        os.environ["LANGBRIDGE_POLICY_DIR"] = d
+    with tempfile.TemporaryDirectory() as artifacts, tempfile.TemporaryDirectory() as checkpoints:
+        _sandbox_env(artifacts, checkpoints)
         try:
+            reviewer_path = os.path.join(artifacts, "agents", "system_prompt", "reviewer.py")
+            os.makedirs(os.path.dirname(reviewer_path), exist_ok=True)
+            with open(reviewer_path, "w", encoding="utf-8") as handle:
+                handle.write("BASE\n")
+            _write_worker_prompt(artifacts, "BASE\n")
+
             def loop_fn(spec):
                 return {"task": spec["task_id"], "worker": "coder",
                         "rounds": [{"round": 1, "diff": "x", "approved": True, "comments": ""}],
@@ -122,13 +154,17 @@ def test_reviewer_guidance_needs_anchor_in_evolver():
             def grade_unknown(task_id, diff):
                 return {"resolved": False, "status": "no_spec"}
 
-            def evolve_fn(prompt):
-                return {"reviewer_guidance_add": ["Be much stricter."]}
+            def trainer_fn(prompt):
+                return {
+                    "file_edits": [
+                        {"path": "agents/system_prompt/reviewer.py", "content": "Be much stricter.\n"}
+                    ]
+                }
 
-            evolver.run([{"task_id": "t1"}], loop_fn=loop_fn, grade=grade_unknown,
-                        evolve_fn=evolve_fn, jury_fn=None, epochs=1, batch_size=1,
+            trainer.run([{"task_id": "t1"}], loop_fn=loop_fn, grade=grade_unknown,
+                        trainer_fn=trainer_fn, jury_fn=None, epochs=1, batch_size=1,
                         do_gate=False)
-            p = policy.load()
-            assert p["reviewer"]["guidance"] == []
+            assert open(reviewer_path, encoding="utf-8").read() == "BASE\n"
         finally:
-            del os.environ["LANGBRIDGE_POLICY_DIR"]
+            os.environ.pop("LANGBRIDGE_ARTIFACT_ROOT", None)
+            os.environ.pop("LANGBRIDGE_CHECKPOINT_DIR", None)

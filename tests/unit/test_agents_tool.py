@@ -1,29 +1,22 @@
-from langbridge_code.agents.agent import run_coder_component
-from langbridge_code.agents.multi_agent import (
-    CODER_TOOL_SCHEMAS,
+from langbridge_code.tools.agent_worker_reviewer import run_worker_component
+from langbridge_code.tools.agent_worker_reviewer import (
+    CODE_WORKER_TOOL_SCHEMAS,
+    approve_worker_write_tool,
+    build_code_worker_toolkit,
     max_steps_report,
-    reviewer_review_passed,
-    run_specialist_agent,
-    run_specialist_tool_call,
+    run_worker_tool_call,
 )
-from langbridge_code.agents.roles import (
-    CHAT_SYSTEM_PROMPT,
-    CODER_ENGINEER_PROMPT,
+from langbridge_code.tools.agent_worker_reviewer import build_reviewer_toolkit, reviewer_review_passed
+from langbridge_code.agents.system_prompt import (
+    WORKER_ENGINEER_PROMPT,
     REVIEWER_ENGINEER_PROMPT,
-    SYSTEM_PROMPT,
 )
 from langbridge_code.tools import MAIN_TOOL_SCHEMAS, MAIN_TOOLS, TOOLS
 
 
-def test_chat_system_prompt():
-    assert SYSTEM_PROMPT == CHAT_SYSTEM_PROMPT
-    assert "LangBridge Code" in SYSTEM_PROMPT
-    assert "Do not reveal" in SYSTEM_PROMPT
-
-
 def test_engineering_guidelines_live_in_specialist_prompts():
-    assert "Think before coding." not in CODER_ENGINEER_PROMPT
-    assert "CODER_STATUS: READY_FOR_REVIEW" in CODER_ENGINEER_PROMPT
+    assert "Think before coding." not in WORKER_ENGINEER_PROMPT
+    assert "WORKER_STATUS: READY_FOR_REVIEW" in WORKER_ENGINEER_PROMPT
     assert "REVIEW_VERDICT: PASS" in REVIEWER_ENGINEER_PROMPT
 
 
@@ -35,21 +28,43 @@ def test_main_tools_exclude_legacy_specialists():
         "glob",
         "read_file",
         "grep",
+        "edit_file",
+        "create_file",
+        "delete_file",
+        "run_tests",
         "bash",
         "read_webpage",
-        "update_plan",
+        "browse_webpage",
+        "read_plan",
+        "check_subtask",
+        "read_skill",
     }
     assert [schema["name"] for schema in MAIN_TOOL_SCHEMAS] == [
         "list_dir",
         "glob",
         "read_file",
         "grep",
+        "edit_file",
+        "create_file",
+        "delete_file",
+        "run_tests",
         "bash",
+        "read_plan",
+        "check_subtask",
         "read_webpage",
-        "update_plan",
+        "browse_webpage",
+        "read_skill",
     ]
-    assert any(schema["name"] == "delete_file" for schema in CODER_TOOL_SCHEMAS)
-    for schema in MAIN_TOOL_SCHEMAS + CODER_TOOL_SCHEMAS:
+    assert any(schema["name"] == "delete_file" for schema in CODE_WORKER_TOOL_SCHEMAS)
+    assert any(schema["name"] == "read_plan" for schema in CODE_WORKER_TOOL_SCHEMAS)
+    assert not any(schema["name"] == "check_subtask" for schema in CODE_WORKER_TOOL_SCHEMAS)
+    coder_tools, coder_schemas = build_code_worker_toolkit(api_key="k", model="m")
+    assert "agent_explorer" in coder_tools
+    assert any(schema["name"] == "agent_explorer" for schema in coder_schemas)
+    reviewer_tools, reviewer_schemas = build_reviewer_toolkit(api_key="k", model="m")
+    assert "agent_explorer" in reviewer_tools
+    assert any(schema["name"] == "agent_explorer" for schema in reviewer_schemas)
+    for schema in MAIN_TOOL_SCHEMAS + coder_schemas:
         assert "purpose" in schema["parameters"]["properties"]
         assert "purpose" in schema["parameters"]["required"]
 
@@ -61,9 +76,9 @@ def test_reviewer_passed_requires_pass_verdict():
 
 
 def test_coder_write_tool_requires_approval(monkeypatch):
-    monkeypatch.setattr("langbridge_code.agents.multi_agent.approve_coder_write_tool", lambda name, arguments: False)
+    monkeypatch.setattr("langbridge_code.tools.agent_worker_reviewer.approve_worker_write_tool", lambda name, arguments: False)
 
-    result = run_specialist_tool_call(
+    result = run_worker_tool_call(
         {
             "type": "function_call",
             "name": "create_file",
@@ -71,7 +86,6 @@ def test_coder_write_tool_requires_approval(monkeypatch):
             "arguments": '{"path":"x.py","content":"print(1)"}',
         },
         {"create_file": lambda **arguments: "created"},
-        "Coder",
     )
 
     assert result == {
@@ -82,9 +96,9 @@ def test_coder_write_tool_requires_approval(monkeypatch):
 
 
 def test_coder_write_tool_runs_after_approval(monkeypatch):
-    monkeypatch.setattr("langbridge_code.agents.multi_agent.approve_coder_write_tool", lambda name, arguments: True)
+    monkeypatch.setattr("langbridge_code.tools.agent_worker_reviewer.approve_worker_write_tool", lambda name, arguments: True)
 
-    result = run_specialist_tool_call(
+    result = run_worker_tool_call(
         {
             "type": "function_call",
             "name": "create_file",
@@ -92,7 +106,6 @@ def test_coder_write_tool_runs_after_approval(monkeypatch):
             "arguments": '{"path":"x.py","content":"print(1)"}',
         },
         {"create_file": lambda **arguments: f"created {arguments['path']}"},
-        "Coder",
     )
 
     assert result == {
@@ -103,9 +116,9 @@ def test_coder_write_tool_runs_after_approval(monkeypatch):
 
 
 def test_specialist_tool_strips_purpose_before_execution(monkeypatch):
-    monkeypatch.setattr("langbridge_code.agents.multi_agent.approve_coder_write_tool", lambda name, arguments: True)
+    monkeypatch.setattr("langbridge_code.tools.agent_worker_reviewer.approve_worker_write_tool", lambda name, arguments: True)
 
-    result = run_specialist_tool_call(
+    result = run_worker_tool_call(
         {
             "type": "function_call",
             "name": "create_file",
@@ -113,7 +126,6 @@ def test_specialist_tool_strips_purpose_before_execution(monkeypatch):
             "arguments": '{"purpose":"Create the target file.","path":"x.py","content":"print(1)"}',
         },
         {"create_file": lambda **arguments: sorted(arguments)},
-        "Coder",
     )
 
     assert result == {
@@ -126,7 +138,7 @@ def test_specialist_tool_strips_purpose_before_execution(monkeypatch):
 def test_coder_write_tool_uses_approval_callback():
     approvals = []
 
-    result = run_specialist_tool_call(
+    result = run_worker_tool_call(
         {
             "type": "function_call",
             "name": "create_file",
@@ -134,21 +146,20 @@ def test_coder_write_tool_uses_approval_callback():
             "arguments": '{"path":"x.py","content":"print(1)"}',
         },
         {"create_file": lambda **arguments: f"created {arguments['path']}"},
-        "Coder",
         approval_callback=lambda role, name, arguments: approvals.append((role, name, arguments)) or True,
     )
 
-    assert approvals == [("Coder", "create_file", {"path": "x.py", "content": "print(1)"})]
+    assert approvals == [("Worker", "create_file", {"path": "x.py", "content": "print(1)"})]
     assert result["output"] == "created x.py"
 
 
-def test_run_coder_component_delegates_to_coder_reviewer(monkeypatch):
+def test_run_worker_component_delegates_to_coder_reviewer(monkeypatch):
     monkeypatch.setattr(
-        "langbridge_code.agents.agent.run_coder_reviewer_loop",
-        lambda *args, **kwargs: (True, "CODER_STATUS: READY_FOR_REVIEW\nSummary: done"),
+        "langbridge_code.tools.agent_worker_reviewer.run_worker_reviewer_loop",
+        lambda *args, **kwargs: (True, "WORKER_STATUS: READY_FOR_REVIEW\nSummary: done"),
     )
 
-    output = run_coder_component("key", "model", {"task": "implement calculator", "context": "repo context"})
+    output = run_worker_component("key", "model", {"task": "implement calculator", "context": "repo context"})
 
     assert "WORKFLOW_REVIEW_STATUS: OK" in output
     assert "READY_FOR_REVIEW" in output
@@ -156,7 +167,6 @@ def test_run_coder_component_delegates_to_coder_reviewer(monkeypatch):
 
 def test_coder_max_steps_report_includes_recent_tool_activity():
     report = max_steps_report(
-        "Coder",
         [
             {
                 "call": {
@@ -172,13 +182,13 @@ def test_coder_max_steps_report_includes_recent_tool_activity():
         ],
     )
 
-    assert report.startswith("CODER_STATUS: IN_PROGRESS")
+    assert report.startswith("WORKER_STATUS: IN_PROGRESS")
     assert "maximum specialist tool-call steps" in report
     assert 'delete_file({"path":"synthetic-env/calculator.py"})' in report
 
 
 def test_specialist_max_steps_fallback_reports_tool_history(monkeypatch):
-    def fake_response(api_key, model, messages, tool_schemas, label):
+    def fake_response(api_key, model, messages, tool_schemas, label, **kwargs):
         return {
             "output": [
                 {
@@ -190,19 +200,14 @@ def test_specialist_max_steps_fallback_reports_tool_history(monkeypatch):
             ]
         }
 
-    monkeypatch.setattr("langbridge_code.agents.multi_agent.MAX_SPECIALIST_AGENT_STEPS", 1)
-    monkeypatch.setattr("langbridge_code.agents.multi_agent.create_specialist_response", fake_response)
-    monkeypatch.setattr("langbridge_code.agents.multi_agent.approve_coder_write_tool", lambda name, arguments: True)
+    monkeypatch.setattr("langbridge_code.tools.agent_worker_reviewer.MAX_WORKER_STEPS", 1)
+    monkeypatch.setattr("langbridge_code.tools.agent_worker_reviewer.create_model_response", fake_response)
+    monkeypatch.setattr("langbridge_code.tools.agent_worker_reviewer.approve_worker_write_tool", lambda name, arguments: True)
 
-    report = run_specialist_agent(
-        "key",
-        "model",
-        "system",
-        "user",
-        [{"name": "delete_file"}],
-        {"delete_file": lambda path: f"Deleted {path}."},
-        "Coder",
-    )
+    from langbridge_code.tools.agent_worker_reviewer import WorkerSession
 
-    assert report.startswith("CODER_STATUS: IN_PROGRESS")
+    session = WorkerSession("key", "model", [{"name": "delete_file"}], {"delete_file": lambda path: f"Deleted {path}."})
+    report = session.send("user")
+
+    assert report.startswith("WORKER_STATUS: IN_PROGRESS")
     assert "delete_file" in report

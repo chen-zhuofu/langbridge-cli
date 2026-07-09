@@ -4,8 +4,12 @@ import subprocess
 from pathlib import Path
 
 from langbridge_code.settings import MAX_FILE_BYTES
+from langbridge_code.tools.common.purpose import PURPOSE_PARAMETER
 
 WORKSPACE_ROOT = Path.cwd().resolve()
+
+from langbridge_code.agents.common.workspace import get_workspace_root  # noqa: E402
+
 DEFAULT_GLOB_LIMIT = 100
 DEFAULT_GREP_LIMIT = 250
 RG_TIMEOUT_SECONDS = 60
@@ -18,13 +22,14 @@ TOOL_SCHEMAS = [
         "parameters": {
             "type": "object",
             "properties": {
+                "purpose": PURPOSE_PARAMETER,
                 "path": {
                     "type": "string",
                     "description": "Directory path relative to the current workspace.",
                     "default": ".",
-                }
+                },
             },
-            "required": [],
+            "required": ["purpose"],
             "additionalProperties": False,
         },
     },
@@ -38,6 +43,7 @@ TOOL_SCHEMAS = [
         "parameters": {
             "type": "object",
             "properties": {
+                "purpose": PURPOSE_PARAMETER,
                 "pattern": {
                     "type": "string",
                     "description": "Glob pattern to match file paths.",
@@ -53,7 +59,7 @@ TOOL_SCHEMAS = [
                     "default": DEFAULT_GLOB_LIMIT,
                 },
             },
-            "required": ["pattern"],
+            "required": ["purpose", "pattern"],
             "additionalProperties": False,
         },
     },
@@ -64,6 +70,7 @@ TOOL_SCHEMAS = [
         "parameters": {
             "type": "object",
             "properties": {
+                "purpose": PURPOSE_PARAMETER,
                 "path": {
                     "type": "string",
                     "description": "File path relative to the current workspace.",
@@ -81,7 +88,7 @@ TOOL_SCHEMAS = [
                     "description": "Optional Python function name to extract from the file.",
                 },
             },
-            "required": ["path"],
+            "required": ["purpose", "path"],
             "additionalProperties": False,
         },
     },
@@ -95,6 +102,7 @@ TOOL_SCHEMAS = [
         "parameters": {
             "type": "object",
             "properties": {
+                "purpose": PURPOSE_PARAMETER,
                 "pattern": {
                     "type": "string",
                     "description": "Regular expression to search for.",
@@ -125,7 +133,7 @@ TOOL_SCHEMAS = [
                     "default": False,
                 },
             },
-            "required": ["pattern"],
+            "required": ["purpose", "pattern"],
             "additionalProperties": False,
         },
     },
@@ -136,6 +144,7 @@ TOOL_SCHEMAS = [
         "parameters": {
             "type": "object",
             "properties": {
+                "purpose": PURPOSE_PARAMETER,
                 "path": {
                     "type": "string",
                     "description": "File path relative to the current workspace.",
@@ -149,7 +158,7 @@ TOOL_SCHEMAS = [
                     "description": "Replacement text.",
                 },
             },
-            "required": ["path", "old_string", "new_string"],
+            "required": ["purpose", "path", "old_string", "new_string"],
             "additionalProperties": False,
         },
     },
@@ -160,6 +169,7 @@ TOOL_SCHEMAS = [
         "parameters": {
             "type": "object",
             "properties": {
+                "purpose": PURPOSE_PARAMETER,
                 "path": {
                     "type": "string",
                     "description": "New file path relative to the current workspace.",
@@ -169,7 +179,7 @@ TOOL_SCHEMAS = [
                     "description": "Full file content to write.",
                 },
             },
-            "required": ["path", "content"],
+            "required": ["purpose", "path", "content"],
             "additionalProperties": False,
         },
     },
@@ -180,12 +190,13 @@ TOOL_SCHEMAS = [
         "parameters": {
             "type": "object",
             "properties": {
+                "purpose": PURPOSE_PARAMETER,
                 "path": {
                     "type": "string",
                     "description": "File path relative to the current workspace.",
-                }
+                },
             },
-            "required": ["path"],
+            "required": ["purpose", "path"],
             "additionalProperties": False,
         },
     },
@@ -203,9 +214,9 @@ def tool(name):
 
 
 def resolve_workspace_path(path):
-    target = (WORKSPACE_ROOT / path).resolve()
+    target = (get_workspace_root() / path).resolve()
     try:
-        target.relative_to(WORKSPACE_ROOT)
+        target.relative_to(get_workspace_root())
     except ValueError:
         raise ValueError("Path must stay inside the current workspace")
     return target
@@ -236,7 +247,7 @@ def _run_rg(args):
 
 def _relative_workspace_path(path):
     resolved = Path(path).resolve()
-    return str(resolved.relative_to(WORKSPACE_ROOT))
+    return str(resolved.relative_to(get_workspace_root()))
 
 
 @tool("list_dir")
@@ -252,7 +263,7 @@ def list_dir(path="."):
         kind = "directory" if child.is_dir() else "file"
         entries.append({"name": child.name, "type": kind})
 
-    return json.dumps({"path": str(target.relative_to(WORKSPACE_ROOT)), "entries": entries}, indent=2)
+    return json.dumps({"path": str(target.relative_to(get_workspace_root())), "entries": entries}, indent=2)
 
 
 @tool("glob")
@@ -273,7 +284,7 @@ def glob(pattern, path=".", max_results=DEFAULT_GLOB_LIMIT):
             continue
         file_path = Path(line.strip()).resolve()
         try:
-            rel = str(file_path.relative_to(WORKSPACE_ROOT))
+            rel = str(file_path.relative_to(get_workspace_root()))
         except ValueError:
             continue
         ranked.append((file_path.stat().st_mtime, rel))
@@ -452,7 +463,7 @@ def create_file(path, content):
     if target.exists():
         raise FileExistsError(f"File already exists: {path}")
     if not target.parent.exists():
-        raise FileNotFoundError(f"Parent directory does not exist: {target.parent.relative_to(WORKSPACE_ROOT)}")
+        raise FileNotFoundError(f"Parent directory does not exist: {target.parent.relative_to(get_workspace_root())}")
 
     target.write_text(content, encoding="utf-8")
     return f"Created {path}."

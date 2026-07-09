@@ -41,11 +41,24 @@ def format_api_error(error: BaseException) -> str:
         return f"Request failed: {text[:400]}…"
     return f"Request failed: {text}"
 from langbridge_code.llm.parse import extract_output_text
-from langbridge_code.settings import API_BASE_URL, API_PROVIDER, load_config
+from langbridge_code.settings import (
+    API_BASE_URL,
+    API_MAX_RETRIES,
+    API_PROVIDER,
+    API_STREAMING_ENABLED,
+    API_TIMEOUT_SECONDS,
+    load_config,
+)
+
+_STREAM_EMIT_INTERVAL_SECONDS = 0.08
 
 
 def make_client(api_key):
-    kwargs = {"api_key": api_key}
+    kwargs = {
+        "api_key": api_key,
+        "timeout": API_TIMEOUT_SECONDS,
+        "max_retries": API_MAX_RETRIES,
+    }
     if API_BASE_URL:
         kwargs["base_url"] = API_BASE_URL
     return OpenAI(**kwargs)
@@ -153,6 +166,96 @@ def from_chat_message(message):
     return output
 
 
+def _stream_chat_completion(client, kwargs, *, label, stream_sink):
+    from langbridge_code.llm.trace import ThoughtEvent
+
+    stream = client.chat.completions.create(**kwargs, stream=True)
+    reasoning_parts: list[str] = []
+    content_parts: list[str] = []
+    tool_calls: dict[int, dict[str, str]] = {}
+    last_emit = 0.0
+
+    def maybe_emit(kind: str, text: str, *, force: bool = False):
+        nonlocal last_emit
+        if stream_sink is None or not text:
+            return
+        now = time.monotonic()
+        if not force and now - last_emit < _STREAM_EMIT_INTERVAL_SECONDS:
+            return
+        last_emit = now
+        stream_sink(ThoughtEvent(role=label, kind=kind, text=text))
+
+    for chunk in stream:
+        if not chunk.choices:
+            continue
+        delta = chunk.choices[0].delta
+        reasoning_delta = getattr(delta, "reasoning_content", None)
+        if reasoning_delta:
+            reasoning_parts.append(reasoning_delta)
+            maybe_emit("reasoning_stream", "".join(reasoning_parts))
+        if delta.content:
+            content_parts.append(delta.content)
+            maybe_emit("content_stream", "".join(content_parts))
+        for tool_delta in delta.tool_calls or []:
+            index = tool_delta.index
+            entry = tool_calls.setdefault(
+                index,
+                {"id": "", "name": "", "arguments": ""},
+            )
+            if tool_delta.id:
+                entry["id"] = tool_delta.id
+            function = tool_delta.function
+            if function is not None:
+                if function.name:
+                    entry["name"] += function.name
+                if function.arguments:
+                    entry["arguments"] += function.arguments
+            hint = entry["name"] or "tool"
+            if entry["arguments"]:
+                hint = f"{hint}({entry['arguments'][:72]})"
+            maybe_emit("action_stream", hint, force=True)
+
+    if stream_sink is not None:
+        if reasoning_parts:
+            maybe_emit("reasoning_stream", "".join(reasoning_parts), force=True)
+        if content_parts:
+            maybe_emit("content_stream", "".join(content_parts), force=True)
+
+    class _Function:
+        def __init__(self, name, arguments):
+            self.name = name
+            self.arguments = arguments
+
+    class _ToolCall:
+        def __init__(self, call_id, name, arguments):
+            self.id = call_id
+            self.function = _Function(name, arguments)
+
+    class _Message:
+        def __init__(self, content=None, tool_calls=None, reasoning=None):
+            self.content = content
+            self.tool_calls = tool_calls
+            self.reasoning_content = reasoning
+
+    built_tool_calls = None
+    if tool_calls:
+        built_tool_calls = [
+            _ToolCall(
+                entry["id"] or f"call_{uuid.uuid4().hex[:12]}",
+                entry["name"],
+                entry["arguments"] or "{}",
+            )
+            for _, entry in sorted(tool_calls.items())
+        ]
+
+    message = _Message(
+        content="".join(content_parts) or None,
+        tool_calls=built_tool_calls,
+        reasoning="".join(reasoning_parts) or None,
+    )
+    return {"output": from_chat_message(message)}
+
+
 def create_model_response(
     api_key,
     model,
@@ -161,6 +264,7 @@ def create_model_response(
     tool_schemas=None,
     reasoning=None,
     label="agent",
+    stream_sink=None,
 ):
     print_llm_request(label, model, agent_input, tool_schemas)
     client = make_client(api_key)
@@ -182,9 +286,17 @@ def create_model_response(
                 }
                 if tool_schemas:
                     kwargs["tools"] = to_chat_tools(tool_schemas)
-                response = client.chat.completions.create(**kwargs)
-                message = response.choices[0].message
-                data = {"output": from_chat_message(message)}
+                if API_STREAMING_ENABLED and stream_sink is not None:
+                    data = _stream_chat_completion(
+                        client,
+                        kwargs,
+                        label=label,
+                        stream_sink=stream_sink,
+                    )
+                else:
+                    response = client.chat.completions.create(**kwargs)
+                    message = response.choices[0].message
+                    data = {"output": from_chat_message(message)}
             print_llm_response(label, data)
             return data
         except RateLimitError as error:

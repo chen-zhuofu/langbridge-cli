@@ -1,7 +1,7 @@
 import json
 from dataclasses import dataclass
 
-from langbridge_code.llm.tool_schema import TOOL_PURPOSE_ARGUMENT
+_TOOL_PURPOSE = "purpose"
 
 
 @dataclass(frozen=True)
@@ -57,14 +57,14 @@ def extract_trace_events(output, label="Agent", include_message=False):
 def extract_tool_purpose(item):
     arguments = parse_json_string(item.get("arguments") or "{}")
     if isinstance(arguments, dict):
-        return arguments.get(TOOL_PURPOSE_ARGUMENT, "")
+        return arguments.get(_TOOL_PURPOSE, "")
     return ""
 
 
 def format_tool_arguments(item):
     arguments = parse_json_string(item.get("arguments") or "{}")
     if isinstance(arguments, dict):
-        arguments.pop(TOOL_PURPOSE_ARGUMENT, None)
+        arguments.pop(_TOOL_PURPOSE, None)
         return json.dumps(arguments, ensure_ascii=False, separators=(",", ":"))
     return item.get("arguments") or "{}"
 

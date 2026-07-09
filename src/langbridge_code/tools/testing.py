@@ -8,6 +8,8 @@ from langbridge_code.settings import (
     MAX_TEST_OUTPUT_CHARS,
     MAX_TEST_TIMEOUT_SECONDS,
 )
+from langbridge_code.tools.common.purpose import PURPOSE_PARAMETER
+from langbridge_code.agents.common.workspace import get_workspace_root
 
 WORKSPACE_ROOT = Path.cwd().resolve()
 
@@ -19,6 +21,7 @@ TOOL_SCHEMAS = [
         "parameters": {
             "type": "object",
             "properties": {
+                "purpose": PURPOSE_PARAMETER,
                 "path": {
                     "type": "string",
                     "description": "Test file or directory path relative to the current workspace.",
@@ -30,7 +33,7 @@ TOOL_SCHEMAS = [
                     "default": DEFAULT_TEST_TIMEOUT_SECONDS,
                 },
             },
-            "required": [],
+            "required": ["purpose"],
             "additionalProperties": False,
         },
     }
@@ -48,9 +51,9 @@ def tool(name):
 
 
 def resolve_workspace_path(path):
-    target = (WORKSPACE_ROOT / path).resolve()
+    target = (get_workspace_root() / path).resolve()
     try:
-        target.relative_to(WORKSPACE_ROOT)
+        target.relative_to(get_workspace_root())
     except ValueError:
         raise ValueError("Path must stay inside the current workspace")
     return target
@@ -63,12 +66,12 @@ def run_tests(path=".", timeout_seconds=DEFAULT_TEST_TIMEOUT_SECONDS):
         raise FileNotFoundError(f"No such test path: {path}")
 
     timeout = max(1, min(int(timeout_seconds), MAX_TEST_TIMEOUT_SECONDS))
-    command = [sys.executable, "-m", "pytest", str(target.relative_to(WORKSPACE_ROOT))]
+    command = [sys.executable, "-m", "pytest", str(target.relative_to(get_workspace_root()))]
 
     try:
         completed = subprocess.run(
             command,
-            cwd=WORKSPACE_ROOT,
+            cwd=get_workspace_root(),
             text=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,

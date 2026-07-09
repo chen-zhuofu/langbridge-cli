@@ -1,10 +1,11 @@
 from langbridge_code.skills import list_skills, load_skill
+from langbridge_code.tools.common.purpose import PURPOSE_PARAMETER
 
 _AVAILABLE = list_skills()
 
 # We deliberately do NOT pin an `enum` of skill names here. The catalog is listed
 # in the description (and the live, per-session skill index is injected into the
-# role prompt), but evolver-written skills are added after this schema is built, so
+# role prompt), but trainer-written skills are added after this schema is built, so
 # restricting the enum would make new skills uncallable. read_skill validates the
 # name itself and returns a helpful error for an unknown id.
 TOOL_SCHEMAS = [
@@ -13,19 +14,20 @@ TOOL_SCHEMAS = [
         "name": "read_skill",
         "description": (
             "Load a skill: a short playbook of guidelines for a kind of work. "
-            "Call it when one of the listed skills fits the current task, then "
-            "follow it. Available skills (more may be listed in your system prompt):\n"
+            "Call when one fits the current task, then follow it. Role playbooks "
+            "may also be listed in your system prompt. Available skills:\n"
             + "\n".join(f"- {name}: {description}" for name, description in _AVAILABLE)
         ),
         "parameters": {
             "type": "object",
             "properties": {
+                "purpose": PURPOSE_PARAMETER,
                 "name": {
                     "type": "string",
                     "description": "Name (id) of the skill to load.",
                 },
             },
-            "required": ["name"],
+            "required": ["purpose", "name"],
             "additionalProperties": False,
         },
     }

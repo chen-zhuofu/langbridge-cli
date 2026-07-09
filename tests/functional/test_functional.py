@@ -1,123 +1,157 @@
-"""Functional tests for the flat workflow (mock LLM boundaries only)."""
+"""Functional tests for the main-agent workflow (mock LLM boundaries only)."""
 
-import json
-
-from langbridge_code.workflow.run import run_workflow
+from langbridge_code.agents.main_agent import MainAgentSession, run_agent_turn
 
 
-def _write_todo(run_log_path, lines):
-    content = "# Todo\n\n" + "\n".join(lines) + "\n"
-    run_log_path.parent.mkdir(parents=True, exist_ok=True)
-    (run_log_path.parent / f"{run_log_path.stem}.todo_list.md").write_text(content, encoding="utf-8")
+class _FakeMainSession:
+    def __init__(self, reply, *, messages=None, **kwargs):
+        self.messages = messages
+        self.reply = reply
+
+    def run_turn(self, prompt, **kwargs):
+        return self.reply
 
 
-def test_workflow_chat_reply_short_circuits(tmp_path, monkeypatch):
+def test_workflow_main_agent_direct_reply(tmp_path, monkeypatch):
     run_log = tmp_path / "run.json"
 
     monkeypatch.setattr(
-        "langbridge_code.workflow.run.route",
-        lambda *args, **kwargs: {
-            "kind": "chat",
-            "reply": "",
-            "hard": False,
-            "task_type": "coding",
-            "task_summary": "",
-        },
-    )
-    monkeypatch.setattr(
-        "langbridge_code.workflow.run._chat_reply",
-        lambda *args, **kwargs: "Hello from LangBridge Code.",
+        "langbridge_code.agents.main_agent.MainAgentSession",
+        lambda *args, **kwargs: _FakeMainSession(
+            "Hello from LangBridge Code.",
+            messages=kwargs.get("messages"),
+            **kwargs,
+        ),
     )
 
-    reply = run_workflow("key", "model", "hi", run_log, 1, print_reply=False)
+    reply = run_agent_turn("key", "model", "hi", run_log, 1, print_reply=False)
     assert reply == "Hello from LangBridge Code."
 
 
-def test_workflow_easy_task_runs_coder_reviewer(tmp_path, monkeypatch):
+def test_workflow_delegation_run_coding(tmp_path, monkeypatch):
     run_log = tmp_path / "run.json"
     calls = []
 
+    class CodingSession(_FakeMainSession):
+        def run_turn(self, prompt, **kwargs):
+            from langbridge_code.tools.agent_worker_reviewer import build_agent_worker_tool
+
+            agent_worker = build_agent_worker_tool(
+                api_key="key",
+                model="model",
+                run_log_path=run_log,
+                turn_id=1,
+                messages=self.messages or [],
+                target=prompt,
+            )
+            todo_path = run_log.parent / "todo_list.md"
+            todo_path.write_text(
+                "<!-- task_type: coding -->\n# Todo\n\n- [ ] Add widget\n",
+                encoding="utf-8",
+            )
+            monkeypatch.setattr(
+                "langbridge_code.tools.agent_worker_reviewer.run_worker_reviewer_loop",
+                lambda *args, **kwargs: calls.append(args) or (True, "Add widget done"),
+            )
+            return agent_worker(
+                prompt="Add widget",
+                description="run coding",
+            )
+
     monkeypatch.setattr(
-        "langbridge_code.workflow.run.route",
-        lambda *args, **kwargs: {
-            "kind": "task",
-            "reply": "",
-            "hard": False,
-            "task_type": "coding",
-            "task_summary": "Add widget",
-        },
-    )
-    monkeypatch.setattr(
-        "langbridge_code.workflow.run.run_coder_reviewer_loop",
-        lambda *args, **kwargs: calls.append(args) or (True, "REVIEW_VERDICT: PASS"),
+        "langbridge_code.agents.main_agent.MainAgentSession",
+        lambda *args, **kwargs: CodingSession("", messages=kwargs.get("messages"), **kwargs),
     )
 
-    reply = run_workflow("key", "model", "add a widget", run_log, 1, print_reply=False)
+    reply = run_agent_turn("key", "model", "add a widget", run_log, 1, print_reply=False)
 
     assert calls
-    assert "Workflow complete" in reply
-    assert "Add widget" in reply
+    assert "Single-task completed" in reply
+    assert "Add widget done" in reply
 
 
-def test_workflow_hard_task_invokes_planner(tmp_path, monkeypatch):
+def test_workflow_delegation_plan_then_execute(tmp_path, monkeypatch):
     run_log = tmp_path / "run.json"
     planner_calls = []
 
+    class PlanThenRunSession(_FakeMainSession):
+        def run_turn(self, prompt, **kwargs):
+            from langbridge_code.tools.agent_worker_reviewer import build_agent_worker_tool
+            from langbridge_code.tools.agent_planner import build_agent_planner_tool
+
+            agent_planner = build_agent_planner_tool(
+                api_key="key",
+                model="model",
+                run_log_path=run_log,
+                turn_id=1,
+            )
+            agent_worker = build_agent_worker_tool(
+                api_key="key",
+                model="model",
+                run_log_path=run_log,
+                turn_id=1,
+                messages=self.messages or [],
+                target=prompt,
+            )
+
+            def fake_planner(*args, **kwargs):
+                planner_calls.append(True)
+                todo_path = run_log.parent / "todo_list.md"
+                todo_path.write_text(
+                    "<!-- task_type: coding -->\n# Todo\n\n- [ ] Build auth system\n",
+                    encoding="utf-8",
+                )
+                return "PLAN_TASK_TYPE: coding\n\nReady."
+
+            monkeypatch.setattr("langbridge_code.tools.agent_planner.run_planner", fake_planner)
+            monkeypatch.setattr(
+                "langbridge_code.tools.agent_worker_reviewer.run_worker_reviewer_loop",
+                lambda *args, **kwargs: (True, "Build auth system done"),
+            )
+            agent_planner(
+                prompt="build auth",
+                description="plan",
+            )
+            return agent_worker(
+                prompt="Build auth system",
+                description="run coding",
+            )
+
     monkeypatch.setattr(
-        "langbridge_code.workflow.run.route",
-        lambda *args, **kwargs: {
-            "kind": "task",
-            "reply": "",
-            "hard": True,
-            "task_type": "coding",
-            "task_summary": "Build auth system",
-        },
+        "langbridge_code.agents.main_agent.MainAgentSession",
+        lambda *args, **kwargs: PlanThenRunSession("", messages=kwargs.get("messages"), **kwargs),
     )
 
-    def fake_planner(*args, **kwargs):
-        planner_calls.append(args)
-        _write_todo(run_log, ["- [ ] Build auth system"])
-
-    monkeypatch.setattr("langbridge_code.workflow.run.run_planner", fake_planner)
-    monkeypatch.setattr(
-        "langbridge_code.workflow.run.run_coder_reviewer_loop",
-        lambda *args, **kwargs: (True, "done"),
-    )
-
-    reply = run_workflow("key", "model", "build auth", run_log, 1, print_reply=False)
+    reply = run_agent_turn("key", "model", "build auth", run_log, 1, print_reply=False)
 
     assert planner_calls
-    assert "Workflow complete" in reply
+    assert "Single-task completed" in reply
 
 
-def test_workflow_refines_plan_on_coder_failure(tmp_path, monkeypatch):
+def test_workflow_worker_failure_returns_without_auto_refine(tmp_path, monkeypatch):
     run_log = tmp_path / "run.json"
-    _write_todo(run_log, ["- [ ] Fix login"])
-
-    monkeypatch.setattr(
-        "langbridge_code.workflow.run.route",
-        lambda *args, **kwargs: {
-            "kind": "task",
-            "reply": "",
-            "hard": True,
-            "task_type": "coding",
-            "task_summary": "Fix login",
-        },
-    )
-    monkeypatch.setattr("langbridge_code.workflow.run.run_planner", lambda *args, **kwargs: None)
-    monkeypatch.setattr(
-        "langbridge_code.workflow.run.run_coder_reviewer_loop",
-        lambda *args, **kwargs: (False, "REVIEW_VERDICT: FAIL"),
-    )
-
     refine_calls = []
 
-    def fake_refine(*args, **kwargs):
-        refine_calls.append(args[2] if len(args) > 2 else kwargs)
+    monkeypatch.setattr(
+        "langbridge_code.tools.agent_worker_reviewer.run_worker_reviewer_loop",
+        lambda *args, **kwargs: (False, "REVIEW_VERDICT: FAIL"),
+    )
+    monkeypatch.setattr(
+        "langbridge_code.tools.agent_planner.run_planner",
+        lambda *args, **kwargs: refine_calls.append(True),
+    )
 
-    monkeypatch.setattr("langbridge_code.workflow.run.run_planner", fake_refine)
+    from langbridge_code.tools.agent_worker_reviewer import build_agent_worker_tool
 
-    reply = run_workflow("key", "model", "fix login", run_log, 1, print_reply=False)
+    agent_worker = build_agent_worker_tool(
+        api_key="key",
+        model="model",
+        run_log_path=run_log,
+        turn_id=1,
+        messages=[{"role": "system", "content": "sys"}],
+        target="fix login",
+    )
+    reply = agent_worker(prompt="Fix login", description="worker")
 
-    assert refine_calls
-    assert "Still open" in reply or "could not complete" in reply.lower()
+    assert not refine_calls
+    assert "stopped (review did not pass)" in reply
