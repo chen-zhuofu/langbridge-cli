@@ -3,12 +3,16 @@ build/
 # runtime agent state: session history, worklogs, component plans, todo_list
 agent-state/
 # session artifacts (todo_list, progress, traces)
-src/langbridge_code/artifacts/
 artifacts/
 # stray session-history dirs from older runs (RUNS_DIR now lives under agent-state/)
 session-history/
 *.egg-info/
 *.py[cod]
+.langbridge/runtime/
+
+# TypeScript TUI
+tui/node_modules/
+tui/dist/
 
 # eval run artifacts (large/regenerable: cloned repos, grader logs, predictions)
 evals/swe-bench/out/

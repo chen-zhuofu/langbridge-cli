@@ -7,7 +7,6 @@ from langbridge_code.tools import (
     merge_branch,
     skills,
     testing,
-    todo_list,
     web,
 )
 
@@ -38,7 +37,6 @@ TOOL_SCHEMAS = (
     + git_tools.TOOL_SCHEMAS
     + lsp.TOOL_SCHEMAS
     + testing.TOOL_SCHEMAS
-    + todo_list.TOOL_SCHEMAS
     + web.TOOL_SCHEMAS
     + skills.TOOL_SCHEMAS
 )
@@ -48,7 +46,6 @@ TOOLS = (
     | git_tools.TOOLS
     | lsp.TOOLS
     | testing.TOOLS
-    | todo_list.TOOLS
     | web.TOOLS
     | skills.TOOLS
 )
@@ -60,7 +57,6 @@ MAIN_TOOL_SCHEMAS = (
     + merge_branch.TOOL_SCHEMAS
     + lsp.TOOL_SCHEMAS
     + testing.TOOL_SCHEMAS
-    + todo_list.TOOL_SCHEMAS
     + web.TOOL_SCHEMAS
     + browser.TOOL_SCHEMAS
     + skills.TOOL_SCHEMAS
@@ -75,16 +71,20 @@ MAIN_TOOLS = {
         | merge_branch.TOOLS
         | lsp.TOOLS
         | testing.TOOLS
-        | todo_list.TOOLS
         | web.TOOLS
         | browser.TOOLS
         | skills.TOOLS
     ).items()
 }
 
-GOAL_VERIFICATION_TOOL_NAMES = MAIN_TOOL_NAMES
-GOAL_VERIFICATION_TOOL_SCHEMAS = list(MAIN_TOOL_SCHEMAS)
-GOAL_VERIFICATION_TOOLS = dict(MAIN_TOOLS)
+# The evaluator verifies only; keep state-mutating merge_branch out of its hands.
+GOAL_VERIFICATION_TOOL_SCHEMAS = [
+    schema for schema in MAIN_TOOL_SCHEMAS if schema["name"] != "merge_branch"
+]
+GOAL_VERIFICATION_TOOL_NAMES = {schema["name"] for schema in GOAL_VERIFICATION_TOOL_SCHEMAS}
+GOAL_VERIFICATION_TOOLS = {
+    name: tool for name, tool in MAIN_TOOLS.items() if name != "merge_branch"
+}
 
 __all__ = [
     "FILE_READ_TOOL_NAMES",

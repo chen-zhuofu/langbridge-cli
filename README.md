@@ -19,6 +19,16 @@ Start it:
 uv run langbridge-code
 ```
 
+On first start, LangBridge prepares a managed tool runtime under
+`<workspace>/.langbridge/runtime/`. Missing `rg`, Git, and Bash are installed
+into a repo-local micromamba prefix; pytest is provided by a local test venv;
+and Playwright Chromium is stored locally. The directory is added to the
+repository's local git exclude file and must not be committed. There is no
+reduced-functionality fallback: if the runtime cannot be downloaded or
+validated (for example, the machine is offline or the workspace is read-only),
+LangBridge exits before starting an agent. Set `LANGBRIDGE_RUNTIME_DIR` to
+override the runtime location.
+
 ## Train (self-play)
 
 LangBridge Code is **self-improving**: an outer **trainer** improves the team over many
@@ -70,12 +80,12 @@ model call, agents run in loops until a task is done.
 ```
 User prompt
   → LangBridge (chat reply OR delegate)
-  → agent_planner (new / refined plan) when needed
-  → read_plan → agent_worker (one unchecked subtask per call)
+  → agent_planner (draft plan) when needed → LangBridge writes todo_list.md
+  → agent_worker (one unchecked subtask per call, full context in the prompt)
        [coding]  → Worker ↔ Reviewer (separate sessions, git diff handoff)
        [slide]   → Worker ↔ Reviewer (.pptx / deck deliverables)
-       on pass   → agent_worker auto-marks todo [x]
-       on fail   → agent_planner refines (splits task)
+       on pass   → hook auto-marks the todo [x] in todo_list.md
+       on fail   → LangBridge revises todo_list.md (continue or split)
   → Summary reply (full project complete only when all todos are [x])
 ```
 
@@ -84,35 +94,34 @@ and optional `/goal` autonomous rounds with a Goal Evaluator.
 
 ## LangBridge Code team (workflow roles)
 
-- **LangBridge** — main agent; coordinates tools and subagents; owns `read_plan` /
-  `clear_plan`; does not implement code itself.
-- **Planner** — builds or refines the markdown session plan (`update_plan`).
-- **Worker** — implements one assigned subtask; may `read_plan` for read-only context;
-  ends with `WORKER_STATUS: READY_FOR_REVIEW`.
+- **LangBridge** — main agent; coordinates tools and subagents; owns the plan file
+  `todo_list.md` (edits it with regular file tools); does not implement code itself.
+- **Planner** — researches the repo and returns a plan DRAFT (it writes no files).
+- **Worker** — implements one assigned subtask from the prompt alone (never reads
+  the plan file); ends with `WORKER_STATUS: READY_FOR_REVIEW`.
 - **Reviewer** — inspects git diff + worker summary; `REVIEW_VERDICT: PASS|NEEDS_WORK|FAIL`.
 - **Explorer** — read-only codebase investigation (`agent_explorer`).
 
 ## How it works
 
 The **LangBridge** main agent handles chat or kicks off multi-step work. The
-**Planner** writes the full `todo_list` (Desired end state, Success criteria, todos
-with `<!-- verify: ... -->` comments). For each unchecked item, LangBridge calls
-**agent_worker** with a **focused subtask prompt** (not the whole plan). After
-review passes, **agent_worker** marks that line `[x]` automatically — the main
-agent does not ask the planner to update checkboxes. When every todo is checked,
-`read_plan` shows no unchecked items and LangBridge may report the project
-finished.
+**Planner** researches the repo and returns a plan draft (Desired end state,
+Success criteria, todos with verify commands); LangBridge reviews it and writes
+the final plan to `todo_list.md` at the workspace root with regular file tools.
+For each unchecked item, LangBridge calls **agent_worker** with a **focused
+subtask prompt** (not the whole plan) carrying all needed context. After review
+passes, a hook marks that line `[x]` in `todo_list.md` automatically. When every
+todo is checked, LangBridge may report the project finished.
 
-**Main agent tools:** filesystem, `bash`, `run_tests`, `read_plan`, `clear_plan`,
+**Main agent tools:** filesystem, `bash`, `run_tests`, `merge_branch`,
 `read_webpage`, `browse_webpage`, `read_skill`, plus subagent tools
 (`agent_planner`, `agent_worker`, `agent_explorer`).
 
-**Planner tools:** `list_dir`, `glob`, `read_file`, `grep`, `update_plan`, `read_skill`,
-`ask_user`.
+**Planner tools:** `list_dir`, `glob`, `read_file`, `grep`, `read_skill` —
+read-only; the main agent writes the plan file.
 
-**Worker / Reviewer tools:** filesystem tools, `bash`, `run_tests`, `read_plan`
-(read-only context), `read_skill`, `agent_explorer`, plus writes (`write`,
-`edit_file`, `delete_file`) for workers.
+**Worker / Reviewer tools:** filesystem tools, `bash`, `run_tests`, `read_skill`,
+plus writes (`write`, `edit_file`, `delete_file`) for workers.
 
 File tools are limited to the directory where you start LangBridge Code. Write tools
 ask for approval first (unless yolo / auto-approve is on).
@@ -125,8 +134,10 @@ and vendored [Superpowers](https://github.com/obra/superpowers) under
 Each tool call includes a required `purpose` field: a short, user-visible sentence
 explaining why the agent is calling that tool. It feeds the live thinking line in the TUI.
 
-Each run writes session artifacts under `src/langbridge_code/artifacts/session-{slug}-{timestamp}/`:
-`todo_list.md`, `progress.md`, and `traces/*.log`.
+Each run writes session artifacts under the langbridge-code checkout, grouped by
+project (the directory you launched from):
+`<langbridge-code>/artifacts/{project}/session-{slug}-{timestamp}/` with
+`progress.md`, `traces.md`, and `traces/`.
 On startup you can resume a previous session or start a new one.
 
 ### Living agents vs. traces (memory)
@@ -249,17 +260,23 @@ Environment overrides: `MOONSHOT_API_KEY` / `KIMI_API_KEY` (Kimi),
 
 Copy any section from `src/langbridge_code/config.json` into
 `~/.langbridge-code/config.json` to override limits, paths, or tool budgets.
-### Textual UI (default)
+### TypeScript TUI (default)
 
-The Textual UI launches by default — a clean, command-driven layout (no button
-clutter): a welcome banner, a flowing conversation, a multi-line prompt, and a
-status bar.
+The TUI is a TypeScript/Ink app (`tui/`) that talks to the Python agent engine
+over a JSONL stdio bridge (`langbridge_code/ui/bridge.py`) — a clean,
+command-driven layout: a welcome banner, a flowing conversation, a multi-line
+prompt, and a status bar.
 
 ```bash
+cd tui && npm install && npm run build && cd ..   # once
 uv run langbridge-code
 ```
 
-<img src="assets/tui-screenshot.png" alt="Textual UI" width="720">
+`langbridge-code` launches the TypeScript TUI (requires `node` and a built
+`tui/dist`; build with `cd tui && npm install && npm run build`). Point at a
+specific Node or Python binary with `LANGBRIDGE_NODE` / `LANGBRIDGE_PYTHON`.
+
+<img src="assets/tui-screenshot.png" alt="TUI" width="720">
 
 While developing locally, prefer `uv run langbridge-code` (editable install) so code
 changes take effect immediately. Use `uv sync --reinstall-package langbridge-code

@@ -78,6 +78,15 @@ include this section.]
 
 ## Task Structure
 
+**LangBridge override:** When the caller asks for a LangBridge `todo_list.md`,
+do not use the step-by-step template below. Use one checkbox per reviewable task,
+followed by these complete contract fields: **Objective**, **Detailed
+requirements**, **Acceptance spec**, **Deliverables**, **Verify**, **Out of
+scope**, and an explicit `(deps: none | tasks N, M)` note on the checkbox. Keep
+the contract detailed enough to execute, but do not include full function bodies.
+Acceptance criteria must be observable pass/fail behavior; verification commands
+are evidence for those criteria, not a replacement for them.
+
 ````markdown
 ### Task N: [Component Name]
 

@@ -1,6 +1,6 @@
 ---
 name: writing-simple-plans
-description: Use when multi-step work needs a committed todo_list but the plan is already obvious — write it yourself with update_plan instead of dispatching agent_planner.
+description: Use when multi-step work needs a todo_list.md but the plan is already obvious — write the file yourself instead of dispatching agent_planner.
 ---
 
 ## LangBridge Code mapping (main agent)
@@ -8,7 +8,8 @@ description: Use when multi-step work needs a committed todo_list but the plan i
 This is the self-planning playbook for your middle triage tier: multi-step work
 whose plan is obvious. Light work needs no plan at all. Heavy planning
 (research, trade-offs, decomposition) goes to agent_planner — do not do it
-yourself. Commit the plan with update_plan before dispatching any agent_worker.
+yourself. Write the plan to `todo_list.md` at the workspace root (write tool)
+before dispatching any agent_worker.
 
 # Writing Simple Plans
 
@@ -17,6 +18,8 @@ yourself. Commit the plan with update_plan before dispatching any agent_worker.
 The plan is "obvious" only if you can already name, without further research:
 - the files each todo touches,
 - the order and dependencies between todos,
+- every required behavior and task boundary,
+- observable pass/fail acceptance criteria,
 - an exact verify command for each coding todo.
 
 If any of these needs exploration or a design decision, stop — dispatch
@@ -24,11 +27,10 @@ agent_explorer for the missing facts or agent_planner for the plan.
 
 ## Format
 
-update_plan expects the full session plan markdown. Keep every section short,
+`todo_list.md` holds the full session plan markdown. Keep every section short,
 but include them all:
 
 ```markdown
-<!-- task_type: coding -->
 # Plan: <short name>
 
 ## Desired end state
@@ -41,19 +43,41 @@ but include them all:
 - <what we are NOT doing>
 
 ## Todo list
-- [ ] Add X to src/pkg/mod.py <!-- depends: none --> <!-- verify: pytest tests/test_mod.py -v -->
-- [ ] Update Y in src/pkg/other.py <!-- depends: none --> <!-- verify: pytest tests/test_other.py -v -->
-- [ ] Wire X into Y <!-- depends: 1, 2 --> <!-- verify: pytest tests/ -v -->
-- [ ] Verify merged codebase and run integration tests <!-- depends: 3 --> <!-- integration -->
+- [ ] Task 1: Add X to src/pkg/mod.py (deps: none)
+  - Objective: <specific outcome>
+  - Detailed requirements:
+    - <required behavior or constraint>
+  - Acceptance spec:
+    - <observable binary pass/fail criterion>
+  - Deliverables: `src/pkg/mod.py`, `tests/test_mod.py`
+  - Verify: `pytest tests/test_mod.py -v`
+  - Out of scope: <task-local exclusions>
+
+- [ ] Task 2: Wire X into Y (deps: task 1)
+  - Objective: ...
+  - Detailed requirements: ...
+  - Acceptance spec: ...
+  - Deliverables: ...
+  - Verify: ...
+  - Out of scope: ...
 ```
 
 Rules:
-- Every todo carries `<!-- depends: none -->` or `<!-- depends: 1, 2 -->`
-  (1-based, top→bottom). Ready todos dispatch in parallel — give independent
-  todos `depends: none` and non-overlapping files.
-- Every coding todo carries `<!-- verify: <exact command> -->`.
-- With 3+ implementation todos, end with one `<!-- integration -->` verification
-  todo that depends on the last of them.
+- Each checkbox begins one complete task contract. Never shorten it by dropping
+  requirements, acceptance criteria, deliverables, verification, or boundaries.
+- Acceptance spec defines observable correct behavior. Verify names the exact
+  evidence that proves it; a command alone is not an acceptance criterion.
+- Check every task for contradictory clauses. Ask the user instead of making a
+  worker guess when code and requirements cannot resolve a product decision.
+- You own every todo's status: mark its checkbox `[x]` yourself (edit_file) when
+  its worker passes review.
+- Every todo ends with an explicit deps note: `(deps: none)` or
+  `(deps: tasks N, M)`. Only `deps: none` todos may be dispatched in parallel —
+  give them non-overlapping files. Todos touching the same file are almost
+  never `deps: none` together.
+- Every coding todo carries exact Verify commands and any necessary manual check.
+- With 3+ implementation todos, end with one integration verification todo that
+  comes after the last of them.
 
 ## Task right-sizing
 
@@ -65,6 +89,7 @@ together.
 
 ## No placeholders
 
-Exact file paths and exact commands only. "Add validation", "handle edge cases",
-"write tests for the above", and TBD are plan failures — if you cannot state the
-concrete edit or check, the plan is not obvious; use agent_planner.
+Exact file paths, requirements, acceptance criteria, and commands only. "Add
+validation", "handle edge cases", "write tests for the above", "works correctly",
+and TBD are plan failures — if you cannot state the concrete behavior and check,
+the plan is not obvious; use agent_planner.

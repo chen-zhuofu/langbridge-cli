@@ -1,6 +1,4 @@
 import json
-import subprocess
-import sys
 from pathlib import Path
 
 from langbridge_code.settings import (
@@ -8,7 +6,10 @@ from langbridge_code.settings import (
     MAX_TEST_OUTPUT_CHARS,
     MAX_TEST_TIMEOUT_SECONDS,
 )
+from langbridge_code.tools.common.env import workspace_env, workspace_python
+from langbridge_code.tools.common.proc import run_command
 from langbridge_code.tools.common.purpose import PURPOSE_PARAMETER
+from langbridge_code.tools.common.runtime import ensure_test_python
 from langbridge_code.agents.common.workspace import get_workspace_root
 
 WORKSPACE_ROOT = Path.cwd().resolve()
@@ -66,26 +67,16 @@ def run_tests(path=".", timeout_seconds=DEFAULT_TEST_TIMEOUT_SECONDS):
         raise FileNotFoundError(f"No such test path: {path}")
 
     timeout = max(1, min(int(timeout_seconds), MAX_TEST_TIMEOUT_SECONDS))
-    command = [sys.executable, "-m", "pytest", str(target.relative_to(get_workspace_root()))]
+    env = workspace_env()
+    python = ensure_test_python(workspace_python(env))
+    command = [python, "-m", "pytest", str(target.relative_to(get_workspace_root()))]
 
-    try:
-        completed = subprocess.run(
-            command,
-            cwd=get_workspace_root(),
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            timeout=timeout,
-            check=False,
-        )
-        output = completed.stdout
-        timed_out = False
-        exit_code = completed.returncode
-    except subprocess.TimeoutExpired as error:
-        output = error.stdout or ""
-        timed_out = True
-        exit_code = None
-
+    output, exit_code, timed_out = run_command(
+        command,
+        cwd=get_workspace_root(),
+        env=env,
+        timeout=timeout,
+    )
     output, truncated = truncate_output(output)
     return json.dumps(
         {

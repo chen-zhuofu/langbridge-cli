@@ -24,31 +24,6 @@ def test_build_turn_user_content_never_inlines_progress(tmp_path):
     assert "Planned auth" not in content
 
 
-def test_build_turn_user_content_includes_continuation_directive(tmp_path):
-    run_log = tmp_path / "session-demo"
-    run_log.mkdir()
-    todo = (
-        "<!-- task_type: slide -->\n# Plan\n\n"
-        "- [x] Done step\n"
-        "- [ ] 美化与校验：检查每页内容\n"
-    )
-    (run_log / "todo_list.md").write_text(todo, encoding="utf-8")
-    content = build_turn_user_content(run_log, "继续")
-    assert "Continuation directive" in content
-    assert "美化与校验" in content
-    assert "Do NOT use ask_user" in content
-
-
-def test_is_continuation_request():
-    from langbridge_code.agents.common.todo_list import is_continuation_request
-
-    assert is_continuation_request("继续")
-    assert is_continuation_request("继续？")
-    assert is_continuation_request("continue")
-    assert not is_continuation_request("继续开发游戏")
-    assert not is_continuation_request("做ppt")
-
-
 def test_create_artifact_session_layout(tmp_path, monkeypatch):
     monkeypatch.setattr("langbridge_code.util.artifacts.ARTIFACTS_DIR", tmp_path)
     from langbridge_code.util.artifacts import create_artifact_session
@@ -57,7 +32,7 @@ def test_create_artifact_session_layout(tmp_path, monkeypatch):
     assert session_dir.is_dir()
     assert session_dir.name.startswith("session-Fix-login-API-")
     assert (session_dir / "traces").is_dir()
-    assert (session_dir / "debug").is_dir()
+    assert not (session_dir / "debug").exists()
     assert (session_dir / "progress.md").is_file()
     assert (session_dir / "traces.md").is_file()
     assert not (session_dir / "session.json").exists()

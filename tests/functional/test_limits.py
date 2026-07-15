@@ -87,6 +87,10 @@ def test_workflow_stops_on_time_budget(tmp_path, monkeypatch):
 
     monkeypatch.setattr("langbridge_code.agents.main_agent.MainAgentSession", ExecSession)
     monkeypatch.setattr(
+        "langbridge_code.tools.agent_worker_reviewer.worktree_mod.is_git_repo",
+        lambda cwd=None: False,
+    )
+    monkeypatch.setattr(
         "langbridge_code.tools.agent_worker_reviewer.run_worker_reviewer_loop",
         lambda *args, **kwargs: (False, "Worker/reviewer loop timed out."),
     )

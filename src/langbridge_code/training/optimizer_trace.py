@@ -5,17 +5,14 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
-from langbridge_code.util.artifacts import traces_dir
+from langbridge_code.util.artifacts import session_trace_path
 
 
 def trace_path(run_log_path) -> Path | None:
-    base = traces_dir(run_log_path)
-    if base is None or not base.is_dir():
+    path = session_trace_path(run_log_path)
+    if path is None or not path.parent.is_dir():
         return None
-    logs = sorted(base.glob("*.log"), key=lambda path: path.stat().st_mtime)
-    if not logs:
-        return None
-    return logs[-1]
+    return path
 
 
 def append_event(run_log_path, event: dict) -> None:

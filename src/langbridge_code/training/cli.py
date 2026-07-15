@@ -11,8 +11,8 @@ import os
 
 from langbridge_code.eval import jury
 from langbridge_code.eval.cli import _build, _limit
+from langbridge_code import settings
 from langbridge_code.settings import (
-    DEFAULT_MODEL,
     TRAIN_DEFAULT_BATCH_SIZE,
     TRAIN_DEFAULT_CHECKPOINT_EVERY,
     TRAIN_DEFAULT_EPOCHS,
@@ -23,7 +23,7 @@ from langbridge_code.training import checkpoint, trainer
 
 def cmd_train(args):
     api_key = load_api_key()
-    model = args.model or os.environ.get("LANGBRIDGE_MODEL", DEFAULT_MODEL)
+    model = args.model or os.environ.get("LANGBRIDGE_MODEL") or settings.DEFAULT_MODEL
     trainer_model = args.trainer_model or model
     specs_for, grade, calls = _build(args, model)
     trainer_fn = trainer.make_trainer_fn(api_key, trainer_model)

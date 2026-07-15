@@ -7,6 +7,7 @@ from langbridge_code.context.prompt.context_budget_notice import (
     CONTEXT_BUDGET_BODY,
     CONTEXT_BUDGET_MARKER,
     CONTEXT_BUDGET_NEAR_LIMIT,
+    CONTEXT_BUDGET_NOTICE_PREFIX,
 )
 from langbridge_code.llm.model_context import format_token_count, model_context_window
 from langbridge_code.settings import CONTEXT_WINDOW_MAX_FRACTION
@@ -65,21 +66,42 @@ def strip_context_budget_notice(content: str) -> str:
     return content[:idx].rstrip()
 
 
-def sync_context_budget_notice(messages, model: str, *, base_system_prompt: str | None = None) -> None:
-    """Refresh the context budget line on the leading system message."""
+def _ensure_stable_system_prompt(messages, *, base_system_prompt: str | None = None) -> None:
+    """Keep the leading system message byte-identical across steps.
+
+    The budget stats used to be rewritten into the system prompt every step,
+    which changed the very first message and defeated provider prefix caching.
+    Now the system prompt stays static; any legacy notice (e.g. from a resumed
+    session) is stripped once.
+    """
     if not messages or messages[0].get("role") != "system":
         return
-    base = base_system_prompt if base_system_prompt is not None else strip_context_budget_notice(
-        str(messages[0].get("content", ""))
-    )
-    line = format_context_budget_line(messages, model)
-    messages[0]["content"] = f"{base.rstrip()}{CONTEXT_BUDGET_MARKER}\n{line}"
+    current = str(messages[0].get("content", ""))
+    base = base_system_prompt if base_system_prompt is not None else strip_context_budget_notice(current)
+    base = base.rstrip()
+    if current != base:
+        messages[0]["content"] = base
 
 
 def prepare_agent_messages(messages, model: str, *, base_system_prompt: str | None = None) -> int:
-    """Inject fresh budget stats and return the token limit for this model."""
-    sync_context_budget_notice(messages, model, base_system_prompt=base_system_prompt)
+    """Keep the prompt prefix cache-stable and return the token budget."""
+    _ensure_stable_system_prompt(messages, base_system_prompt=base_system_prompt)
     return context_budget_tokens(model)
+
+
+def budget_notice_message(messages, model: str) -> dict:
+    """One transient user message with current budget stats for the request tail."""
+    line = format_context_budget_line(messages, model)
+    return {"role": "user", "content": f"{CONTEXT_BUDGET_NOTICE_PREFIX}\n{line}"}
+
+
+def messages_with_budget_notice(messages, model: str) -> list:
+    """Copy of ``messages`` with budget stats appended as the last message.
+
+    The stats change every step, so they must never enter the stored
+    transcript or the (cache-relevant) prompt prefix — only the request tail.
+    """
+    return [*messages, budget_notice_message(messages, model)]
 
 
 def format_status_context_line(messages, model: str, *, label: str | None = None) -> str:

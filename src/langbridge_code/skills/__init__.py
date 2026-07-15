@@ -2,9 +2,6 @@ from pathlib import Path
 
 SKILLS_DIR = Path(__file__).resolve().parent
 
-# Upstream Superpowers vendor tree — not loaded at runtime; agent folders hold copies.
-SUPERPOWERS_VENDOR_DIR = SKILLS_DIR / "superpowers"
-
 AGENT_ROLES = (
     "langbridge",
     "explorer",
@@ -44,10 +41,7 @@ REVIEWER_CODING_SKILL_NAMES = (
 
 REVIEWER_SLIDE_SKILL_NAMES: tuple[str, ...] = ()
 
-# Legacy aliases for tests and training checkpoints.
 LANGBRIDGE_SKILL_NAMES = ("grilling", "writing-simple-plans")
-CODER_SKILL_NAMES = WORKER_CODING_SKILL_NAMES
-REVIEWER_SKILL_NAMES = REVIEWER_CODING_SKILL_NAMES
 
 
 def langbridge_skill_catalog():

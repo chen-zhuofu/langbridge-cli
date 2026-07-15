@@ -34,9 +34,6 @@ def test_main_agent_tool_schemas_include_full_toolkit_and_subagents():
         "lsp",
         "read_webpage",
         "browse_webpage",
-        "read_plan",
-        "clear_plan",
-        "update_plan",
         "read_skill",
         "ask_user",
         "agent_planner",
@@ -55,7 +52,7 @@ def test_subagent_planner_returns_draft_without_committing(tmp_path, monkeypatch
             "```markdown\n"
             "# Plan: Auth\n\n"
             "## Todo list\n"
-            "- [ ] Build auth <!-- depends: none -->\n"
+            "- [ ] Build auth (verify: pytest tests/test_auth.py -v)\n"
             "```\n\n"
             "## Summary\nPlan ready.\n"
         )
@@ -75,12 +72,11 @@ def test_subagent_planner_returns_draft_without_committing(tmp_path, monkeypatch
         description="plan",
     )
     assert "DRAFT" in result
-    assert "update_plan" in result
+    assert "todo_list.md" in result
     assert "ask the user" in result.lower() or "ask_user" in result
     assert "Suggested PLAN_TASK_TYPE: coding" in result
-    from langbridge_code.agents.common.todo_list import load_tasks
-
-    assert load_tasks(run_log) == []
+    # The planner never writes the plan file itself.
+    assert not (tmp_path / "todo_list.md").exists()
 
 
 def test_main_agent_run_turn_does_not_finalize_locally(tmp_path, monkeypatch):
@@ -162,6 +158,59 @@ def test_main_agent_session_injects_session_context(monkeypatch, tmp_path):
     assert progress_blocks and "Built webpage" in progress_blocks[0]
     assert progress_blocks[0].rstrip().endswith("</progress>")
     assert "continue" in user_messages
+
+
+def test_main_agent_first_send_uses_full_traces_when_they_fit(monkeypatch, tmp_path):
+    run_log = tmp_path / "session-demo"
+    run_log.mkdir()
+    from langbridge_code.util.progress import PROGRESS_HEADER, write_progress
+    from langbridge_code.util.session_traces import append_progress_boundary, append_raw_round
+
+    write_progress(run_log, PROGRESS_HEADER + "## Turn 1\n- Built webpage\n")
+    append_raw_round(run_log, 1, [{"role": "user", "content": "make a webpage"}])
+    append_progress_boundary(run_log, 1)
+    append_raw_round(run_log, 2, [{"role": "assistant", "content": "styling the header"}])
+
+    captured = {}
+
+    def fake_response(*args, **kwargs):
+        captured["messages"] = kwargs.get("messages") or args[2]
+        return {
+            "output": [
+                {
+                    "type": "message",
+                    "content": [{"type": "output_text", "text": "Resumed."}],
+                }
+            ]
+        }
+
+    monkeypatch.setattr(
+        "langbridge_code.agents.main_agent.create_model_response",
+        fake_response,
+    )
+    monkeypatch.setattr("langbridge_code.agents.main_agent.write_worklog_received", lambda *a, **k: None)
+    monkeypatch.setattr("langbridge_code.agents.main_agent.write_worklog_finish", lambda *a, **k: None)
+    monkeypatch.setattr("langbridge_code.agents.main_agent.emit_phase", lambda *a, **k: None)
+
+    session = MainAgentSession(
+        "key",
+        "model",
+        [{"role": "system", "content": "sys"}],
+        run_log,
+        3,
+        target="continue",
+    )
+    assert session.run_turn("continue") == "Resumed."
+
+    user_messages = [m["content"] for m in captured["messages"] if m.get("role") == "user"]
+    progress_blocks = [c for c in user_messages if c.startswith("<progress>")]
+    assert progress_blocks
+    block = progress_blocks[0]
+    # Small session: the full raw traces fit the resume budget, so they replace
+    # the progress summary entirely.
+    assert "make a webpage" in block
+    assert "styling the header" in block
+    assert "Built webpage" not in block
 
 
 def test_main_agent_reuses_messages_across_turns(monkeypatch, tmp_path):

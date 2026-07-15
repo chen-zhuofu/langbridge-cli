@@ -19,14 +19,15 @@ whether that condition is satisfied. You did not do the work yourself and you
 should not trust the agent's own assessment without evidence.
 
 You have the same verification tools as the main agent: read files, grep, list
-directories, run bash (tests, builds, curl), read_plan (success criteria and todo
-progress), read_webpage (simple HTTP pages), browse_webpage (Playwright for
-JS-rendered pages), and read_skill when a playbook helps your check. Use them to
-verify independently — transcript claims are hints, not proof.
+directories, run bash (tests, builds, curl), read_webpage (simple HTTP pages),
+browse_webpage (Playwright for JS-rendered pages), and read_skill when a playbook
+helps your check. Use them to verify independently — transcript claims are hints,
+not proof.
 
 Do the following every time:
 1. Read the completion condition.
-2. read_plan when a session plan exists — check Desired end state and Success criteria.
+2. If a plan file exists (todo_list.md at the workspace root), read_file it —
+   check Desired end state and Success criteria.
 3. Gather evidence with tools (run verify commands, inspect files, check live URLs).
 4. Decide whether the condition is genuinely satisfied.
 
@@ -118,8 +119,6 @@ class GoalEvaluatorAgent:
             arguments = without_purpose(json.loads(call.get("arguments") or "{}"))
             if name not in GOAL_VERIFICATION_TOOLS:
                 raise ValueError(f"Unknown evaluator tool: {name}")
-            if name == "read_plan":
-                arguments["run_log_path"] = self.run_log_path
             output = GOAL_VERIFICATION_TOOLS[name](**arguments)
         except Exception as error:
             output = f"Tool error: {error}"

@@ -163,9 +163,7 @@ def test_create_model_response_fails_fast_on_tpd(monkeypatch):
     assert sleeps == []
 
 
-def test_create_model_response_enables_moonshot_thinking(monkeypatch):
-    captured = {}
-
+def _fake_chat_client(captured):
     class _Message:
         content = "ok"
         tool_calls = None
@@ -185,14 +183,33 @@ def test_create_model_response_enables_moonshot_thinking(monkeypatch):
     client.chat = type("Chat", (), {})()
     client.chat.completions = type("Completions", (), {})()
     client.chat.completions.create = create
+    return client
 
+
+def _patch_chat_provider(monkeypatch, client, provider):
     monkeypatch.setattr("langbridge_code.llm.client.make_client", lambda _key: client)
     monkeypatch.setattr("langbridge_code.llm.client.uses_responses_api", lambda: False)
-    monkeypatch.setattr("langbridge_code.llm.client.API_STREAMING_ENABLED", False)
+    monkeypatch.setattr("langbridge_code.settings.API_STREAMING_ENABLED", False)
+    monkeypatch.setattr("langbridge_code.settings.API_PROVIDER", provider)
+
+
+def test_create_model_response_enables_moonshot_thinking(monkeypatch):
+    captured = {}
+    _patch_chat_provider(monkeypatch, _fake_chat_client(captured), "moonshot")
 
     data = create_model_response("key", "kimi-k2.7-code", [{"role": "user", "content": "hi"}])
 
     assert captured["extra_body"]["thinking"] == {"type": "enabled", "keep": "all"}
+    assert data["output"][0]["type"] == "reasoning"
+
+
+def test_create_model_response_enables_deepseek_thinking(monkeypatch):
+    captured = {}
+    _patch_chat_provider(monkeypatch, _fake_chat_client(captured), "deepseek")
+
+    data = create_model_response("key", "deepseek-v4-flash", [{"role": "user", "content": "hi"}])
+
+    assert captured["extra_body"]["thinking"] == {"type": "enabled"}
     assert data["output"][0]["type"] == "reasoning"
 
 

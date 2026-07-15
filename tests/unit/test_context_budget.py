@@ -2,6 +2,7 @@ from langbridge_code.context.common.budget import (
     context_budget_snapshot,
     context_budget_tokens,
     format_context_budget_line,
+    messages_with_budget_notice,
     prepare_agent_messages,
     strip_context_budget_notice,
 )
@@ -16,13 +17,44 @@ def test_context_budget_uses_fraction():
     assert context_budget_tokens("kimi-k2.7-code") == int(262_144 * 0.4)
 
 
-def test_prepare_agent_messages_injects_budget_notice():
+def test_prepare_agent_messages_keeps_system_prompt_stable():
+    """Prefix caching: the system prompt must stay byte-identical across steps."""
     messages = [{"role": "system", "content": "You are a test agent."}]
     budget = prepare_agent_messages(messages, "kimi-k2.7-code")
     assert budget == int(262_144 * 0.4)
-    assert "Compact threshold" in messages[0]["content"]
-    assert "no hard context stop" in messages[0]["content"]
-    assert "262,144 tokens" in messages[0]["content"]
+    assert messages[0]["content"] == "You are a test agent."
+
+    messages.append({"role": "user", "content": "hello"})
+    prepare_agent_messages(messages, "kimi-k2.7-code")
+    assert messages[0]["content"] == "You are a test agent."
+
+
+def test_prepare_agent_messages_strips_legacy_notice():
+    messages = [{
+        "role": "system",
+        "content": "Base prompt.\n\n---\nContext status (updated each step):\nold stats",
+    }]
+    prepare_agent_messages(messages, "kimi-k2.7-code")
+    assert messages[0]["content"] == "Base prompt."
+
+
+def test_messages_with_budget_notice_appends_transient_tail():
+    messages = [
+        {"role": "system", "content": "You are a test agent."},
+        {"role": "user", "content": "hello"},
+    ]
+    request = messages_with_budget_notice(messages, "kimi-k2.7-code")
+
+    # Stored transcript untouched; request gets one extra trailing message.
+    assert len(messages) == 2
+    assert len(request) == 3
+    assert request[:2] == messages
+    tail = request[-1]["content"]
+    assert request[-1]["role"] == "user"
+    assert "[CONTEXT_STATUS]" in tail
+    assert "Compact threshold" in tail
+    assert "no hard context stop" in tail
+    assert "262,144 tokens" in tail
 
 
 def test_strip_context_budget_notice():

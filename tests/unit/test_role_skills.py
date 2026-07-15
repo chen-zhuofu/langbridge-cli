@@ -134,23 +134,22 @@ def test_worker_session_sets_skill_index_block():
 def test_planner_prompt_owns_planning():
     assert "planner" in PLANNER_PROMPT.lower()
     assert "todo list" in PLANNER_PROMPT.lower()
-    assert "<!-- integration -->" in PLANNER_PROMPT
-    assert "<!-- depends:" in PLANNER_PROMPT
+    assert "<!-- integration -->" not in PLANNER_PROMPT
+    assert "<!-- depends:" not in PLANNER_PROMPT
     assert "Out of scope" in PLANNER_PROMPT
     assert "Key discoveries" in PLANNER_PROMPT
     assert "Changes required" in PLANNER_PROMPT
-    assert "verify:" in PLANNER_PROMPT
+    assert "verify:" in PLANNER_PROMPT.lower()
     assert "ask_user" not in PLANNER_PROMPT.lower()
     assert "do not ask the user" in PLANNER_PROMPT.lower()
     assert "ask_user" not in PLANNER_TOOL_NAMES
-    assert "update_plan" not in PLANNER_TOOL_NAMES
+    assert "write" not in PLANNER_TOOL_NAMES
 
 
 def test_worker_prompt_does_not_own_planning():
-    assert "planner" in WORKER_ENGINEER_PROMPT.lower()
-    assert "do not call update_plan" in WORKER_ENGINEER_PROMPT.lower()
-    assert "edit the todo_list" in WORKER_ENGINEER_PROMPT.lower()
-    assert "read_plan" in WORKER_ENGINEER_PROMPT.lower()
+    assert "todo_list.md" in WORKER_ENGINEER_PROMPT
+    assert "do not read or edit todo_list.md" in WORKER_ENGINEER_PROMPT.lower()
+    assert "read_plan" not in WORKER_ENGINEER_PROMPT.lower()
 
 
 def test_worker_coding_prompt_includes_general_loop_guidance():
@@ -199,5 +198,7 @@ def test_explorer_prompt_inlines_debugging_guidance():
     assert "Systematic debugging" in prompt
     assert "NO FIXES WITHOUT ROOT CAUSE" in prompt
     assert "Role playbooks" not in prompt
-    assert "read_skill" not in prompt
     assert "superpowers_subagent-driven-development" not in prompt
+    # Explorer shares the main agent's skill mechanism: <skill_index> + read_skill.
+    assert "<skill_index>" in prompt
+    assert "<progress>" in prompt

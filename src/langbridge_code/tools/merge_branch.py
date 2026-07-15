@@ -5,6 +5,7 @@ from pathlib import Path
 from langbridge_code.agents.common import worktree as worktree_mod
 from langbridge_code.agents.common.workspace import get_workspace_root
 from langbridge_code.tools.common.purpose import PURPOSE_PARAMETER
+from langbridge_code.tools.common.runtime import managed_binary
 
 MERGE_BRANCH_TOOL_SCHEMA = {
     "type": "function",
@@ -12,8 +13,8 @@ MERGE_BRANCH_TOOL_SCHEMA = {
     "description": (
         "Merge one ready feature branch (from parallel agent_worker runs) into the "
         "main workspace. Main agent only — do not dispatch merge tasks to agent_worker. "
-        "Call once per branch listed by read_plan. On success the branch is marked "
-        "merged and its worktree is cleaned up. On conflicts the merge is left in "
+        "Call once per ready branch reported by the agent_worker results. On success "
+        "the branch is marked merged and its worktree is cleaned up. On conflicts the merge is left in "
         "progress: resolve the listed files yourself with edit_file, stage with bash "
         "`git add`, commit with git_commit (or bash `git commit --no-edit`), then call "
         "merge_branch again with the same branch to confirm and clean up."
@@ -39,7 +40,7 @@ TOOLS = {}
 
 def _run_git(*args, cwd=None):
     return subprocess.run(
-        ["git", *args],
+        [managed_binary("git"), *args],
         cwd=cwd or get_workspace_root(),
         capture_output=True,
         text=True,
@@ -96,8 +97,21 @@ def merge_branch(branch, run_log_path=None):
         return "Tool error: branch must be a non-empty string."
     if not worktree_mod.is_git_repo(get_workspace_root()):
         return "Tool error: the workspace is not a git repository."
+    current = (_run_git("rev-parse", "--abbrev-ref", "HEAD").stdout or "").strip()
+    if branch == current:
+        return (
+            f"Tool error: {branch!r} is the currently checked-out branch. "
+            "Pass a ready feature branch to merge into it."
+        )
 
     ready = worktree_mod.ready_branches(run_log_path)
+    # Failed worker branches carry committed partial work; the main agent may
+    # merge one to continue from that state.
+    mergeable = ready + [
+        item["branch"]
+        for item in worktree_mod.load_registry(run_log_path).get("branches", [])
+        if item.get("status") == "failed" and item.get("branch")
+    ]
 
     # Confirmation call after manual conflict resolution.
     if _branch_is_merged(branch):
@@ -113,11 +127,11 @@ def merge_branch(branch, run_log_path=None):
             f"its worktree.\n\n{_remaining_note(run_log_path)}"
         )
 
-    if ready and branch not in ready:
+    if mergeable and branch not in mergeable:
         return (
             f"Tool error: branch {branch!r} is not in ready branches. "
-            "read_plan and merge one ready branch per call.\n"
-            "Ready branches:\n" + "\n".join(f"- {b}" for b in ready)
+            "Merge one ready branch per call.\n"
+            "Ready branches:\n" + "\n".join(f"- {b}" for b in mergeable)
         )
 
     if _merge_in_progress():

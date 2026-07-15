@@ -1,19 +1,14 @@
-"""Session-scoped raw traces: traces.md (main agent) + per-agent trace.jsonl."""
+"""Session-scoped raw traces: traces.md (main agent, read on cold-start resume)."""
 from __future__ import annotations
 
 import json
 import re
 import threading
-from datetime import datetime
 
 from langbridge_code.context.common.budget import estimate_tokens
 from langbridge_code.llm.model_context import model_context_window
 from langbridge_code.settings import TRACES_RESUME_MAX_FRACTION
-from langbridge_code.util.artifacts import (
-    agent_file_prefix,
-    traces_dir,
-    traces_md_path as artifact_traces_md_path,
-)
+from langbridge_code.util.artifacts import traces_md_path as artifact_traces_md_path
 
 TRACES_HEADER = "# Session traces\n"
 PROGRESS_BOUNDARY_RE = re.compile(
@@ -21,15 +16,13 @@ PROGRESS_BOUNDARY_RE = re.compile(
     re.MULTILINE,
 )
 _TURN_SECTION_RE = re.compile(r"^## Turn \d+\s*$", re.MULTILINE)
+_JSON_BLOCK_RE = re.compile(r"^```json\s*$(.*?)^```\s*$", re.MULTILINE | re.DOTALL)
 
 _traces_lock = threading.Lock()
 
 
 def traces_md_path(run_log_path):
-    path = artifact_traces_md_path(run_log_path)
-    if path is not None:
-        return path
-    return run_log_path.with_name("traces.md") if run_log_path else None
+    return artifact_traces_md_path(run_log_path)
 
 
 def read_traces(run_log_path) -> str:
@@ -47,6 +40,54 @@ def write_traces(run_log_path, content: str) -> None:
         return
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content.rstrip() + "\n", encoding="utf-8")
+
+
+def _message_text(item: dict) -> str:
+    """Plain text of a user/assistant message (string or content-part list)."""
+    content = item.get("content")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "".join(
+            part.get("text", "") for part in content if isinstance(part, dict)
+        )
+    return ""
+
+
+# Engine-injected user messages (hooks, status blocks, pinned background);
+# not part of the human conversation, so hidden from resume replay.
+_INJECTED_PREFIXES = ("[HOOK]", "[CONTEXT_STATUS]", "<background>", "<assigned_task>")
+
+
+def read_conversation(run_log_path) -> list[tuple[str, str]]:
+    """Ordered (role, text) user/assistant messages from the raw session traces.
+
+    Used by the TUI to replay the full past conversation on resume. Tool
+    calls, tool outputs, reasoning items, and engine-injected user messages
+    (progress-note hooks, context status, background blocks) are skipped.
+    """
+    content = read_traces(run_log_path)
+    conversation: list[tuple[str, str]] = []
+    for match in _JSON_BLOCK_RE.finditer(content):
+        try:
+            items = json.loads(match.group(1))
+        except (json.JSONDecodeError, ValueError):
+            continue
+        if not isinstance(items, list):
+            continue
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            role = item.get("role")
+            if role not in ("user", "assistant"):
+                continue
+            text = _message_text(item).strip()
+            if not text:
+                continue
+            if role == "user" and text.startswith(_INJECTED_PREFIXES):
+                continue
+            conversation.append((role, text))
+    return conversation
 
 
 def _filter_round_messages(round_messages: list[dict]) -> list[dict]:
@@ -106,62 +147,6 @@ def append_progress_boundary(run_log_path, turn_id: int) -> None:
         write_traces(run_log_path, existing.rstrip() + "\n\n" + marker + "\n")
 
 
-_agent_trace_lock = threading.Lock()
-
-
-def agent_trace_path(run_log_path, label: str, instance_id=None):
-    """Per-agent-instance raw trace file: traces/{label}_{id}.trace.jsonl."""
-    base = traces_dir(run_log_path)
-    if base is None or not label:
-        return None
-    return base / f"{agent_file_prefix(label, instance_id)}.trace.jsonl"
-
-
-def append_agent_trace_round(
-    run_log_path,
-    label: str,
-    instance_id,
-    turn_id: int,
-    round_messages: list[dict],
-    *,
-    step: int | None = None,
-) -> None:
-    """Append one raw round (no system) as a JSONL record for this agent."""
-    filtered = _filter_round_messages(round_messages)
-    path = agent_trace_path(run_log_path, label, instance_id)
-    if path is None or not filtered:
-        return
-    record = {
-        "ts": datetime.now().isoformat(timespec="seconds"),
-        "turn": int(turn_id or 0),
-        "messages": filtered,
-    }
-    if step is not None:
-        record["step"] = int(step)
-    line = json.dumps(record, ensure_ascii=False)
-    with _agent_trace_lock:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with open(path, "a", encoding="utf-8") as handle:
-            handle.write(line + "\n")
-
-
-def read_agent_trace(run_log_path, label: str, instance_id=None) -> list[dict]:
-    """Parse an agent's trace.jsonl into records (skips corrupt lines)."""
-    path = agent_trace_path(run_log_path, label, instance_id)
-    if path is None or not path.exists():
-        return []
-    records = []
-    for line in path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            records.append(json.loads(line))
-        except json.JSONDecodeError:
-            continue
-    return records
-
-
 def _content_after_last_boundary(content: str) -> str:
     matches = list(PROGRESS_BOUNDARY_RE.finditer(content))
     if not matches:
@@ -192,24 +177,33 @@ def _trim_head_to_budget(text: str, max_tokens: int) -> str:
     return "\n\n".join(kept).strip()
 
 
-def select_traces_for_resume(run_log_path, *, model: str, progress: str = "") -> str:
-    """Return traces text that fits under the resume background budget with progress."""
+def build_resume_background(run_log_path, *, model: str, progress: str = "") -> str:
+    """Background text for a cold start (new session object / resume).
+
+    When the full raw traces fit the resume budget on their own, use them
+    directly — the progress notes are just a summary of the same rounds.
+    Otherwise fall back to progress notes plus the traces recorded after the
+    last progress boundary (rounds not yet summarized into progress.md),
+    trimmed from the head when even those exceed the remaining budget.
+    """
+    progress = (progress or "").strip()
     content = read_traces(run_log_path).strip()
     if not content or content == TRACES_HEADER.strip():
-        return ""
+        return progress
+
     window = model_context_window(model)
     budget = max(1, int(window * TRACES_RESUME_MAX_FRACTION))
-    progress_tokens = estimate_tokens(progress) if progress else 0
-    remaining = max(0, budget - progress_tokens)
-    if remaining <= 0:
-        return ""
-
-    if estimate_tokens(progress + "\n\n" + content) <= budget:
+    if estimate_tokens(content) <= budget:
         return content
 
-    after = _content_after_last_boundary(content)
-    if after.strip() and estimate_tokens(progress + "\n\n" + after) <= budget:
-        return after.strip()
-
-    candidate = after.strip() if after.strip() else content
-    return _trim_head_to_budget(candidate, remaining)
+    # Rounds after the last boundary are the only ones progress.md does not
+    # cover; a healthy shutdown leaves nothing here and progress alone suffices.
+    after = _content_after_last_boundary(content).strip()
+    if not after:
+        return progress
+    remaining = max(0, budget - estimate_tokens(progress))
+    tail = _trim_head_to_budget(after, remaining)
+    if not tail.strip():
+        return progress
+    heading = "## Raw main-agent traces since the last progress note"
+    return (progress + "\n\n" if progress else "") + heading + "\n\n" + tail.strip()

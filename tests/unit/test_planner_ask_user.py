@@ -33,15 +33,17 @@ def test_resolve_ask_user_answer_maps_numbers_to_options():
     assert resolve_ask_user_answer("custom thing", options) == "custom thing"
 
 
-def test_ask_user_and_update_plan_not_on_planner():
+def test_planner_has_no_ask_user_or_write_tools():
     names = {item["name"] for item in PLANNER_TOOL_SCHEMAS}
     assert "ask_user" not in names
-    assert "update_plan" not in names
+    assert "write" not in names
+    assert "edit_file" not in names
 
 
-def test_ask_user_and_update_plan_on_main():
+def test_main_agent_edits_plan_with_file_tools():
     names = {item["name"] for item in MAIN_TOOL_SCHEMAS}
-    assert "update_plan" in names
+    assert {"write", "edit_file", "read_file"} <= names
+    assert "update_plan" not in names
 
 
 def test_ask_user_schema_requires_options():

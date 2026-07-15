@@ -30,12 +30,13 @@ def main():
         print(json.dumps({"error": "no task"}))
         return 1
 
-    from langbridge_code.settings import DEFAULT_MODEL, load_api_key
+    from langbridge_code import settings
+    from langbridge_code.settings import load_api_key
     from langbridge_code.util.session import create_run_log_path
     from langbridge_code.training import optimizer_trace
 
     api_key = load_api_key()
-    model = os.environ.get("LANGBRIDGE_MODEL", DEFAULT_MODEL)
+    model = os.environ.get("LANGBRIDGE_MODEL") or settings.DEFAULT_MODEL
     run_log_path = create_run_log_path(task)
 
     report = ""

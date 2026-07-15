@@ -21,9 +21,18 @@ def test_langbridge_system_prompt_covers_answer_and_delegate():
     assert "Subagent-driven execution" in prompt
     assert "superpowers_writing-plans" not in prompt
     assert "answer in conversation" in prompt.lower() or "answer directly" in prompt.lower()
-    # Tool how-to belongs in schemas; workflow mentions (read_plan, agent_worker) are OK.
-    for tool_name in ("ask_user", "grep", "read_file"):
+    # Tool how-to belongs in schemas; workflow mentions (todo_list.md file tools,
+    # agent_worker) are OK.
+    for tool_name in ("ask_user", "grep"):
         assert tool_name not in prompt
+
+
+def test_main_agent_records_every_subagent_result_in_progress():
+    prompt = langbridge_system_prompt()
+    assert "Every time any subagent returns a result" in prompt
+    assert "call note_progress exactly once for that returned result" in prompt
+    assert "including failures and partial results" in prompt
+    assert "one note_progress call per result" in prompt
 
 
 def test_engineering_guidelines_live_in_specialist_prompts():

@@ -11,8 +11,9 @@ from langbridge_code.util.session_traces import (
     TRACES_HEADER,
     append_progress_boundary,
     append_raw_round,
+    build_resume_background,
+    read_conversation,
     read_traces,
-    select_traces_for_resume,
 )
 
 
@@ -52,6 +53,50 @@ def test_append_raw_round_groups_same_turn(tmp_path):
     assert text.index("step one") < text.index("step two") < text.index('"next"')
 
 
+def test_read_conversation_returns_user_and_assistant_in_order(tmp_path):
+    run_log = tmp_path / "session-demo"
+    run_log.mkdir()
+    append_raw_round(
+        run_log,
+        1,
+        [
+            {"role": "user", "content": "hi"},
+            {"type": "reasoning", "summary": [{"type": "summary_text", "text": "think"}]},
+            {"type": "function_call", "name": "read_file", "call_id": "c1", "arguments": "{}"},
+            {"type": "function_call_output", "call_id": "c1", "output": "data"},
+            {"role": "assistant", "content": "hello"},
+        ],
+    )
+    append_raw_round(run_log, 2, _round(user="next", assistant="reply"))
+    conversation = read_conversation(run_log)
+    assert conversation == [
+        ("user", "hi"),
+        ("assistant", "hello"),
+        ("user", "next"),
+        ("assistant", "reply"),
+    ]
+
+
+def test_read_conversation_handles_content_part_lists(tmp_path):
+    run_log = tmp_path / "session-demo"
+    run_log.mkdir()
+    append_raw_round(
+        run_log,
+        1,
+        [
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": [{"type": "output_text", "text": "part reply"}]},
+        ],
+    )
+    assert read_conversation(run_log) == [("user", "hi"), ("assistant", "part reply")]
+
+
+def test_read_conversation_empty_traces(tmp_path):
+    run_log = tmp_path / "session-demo"
+    run_log.mkdir()
+    assert read_conversation(run_log) == []
+
+
 def test_append_progress_boundary_marks_turn(tmp_path):
     run_log = tmp_path / "session-demo"
     run_log.mkdir()
@@ -64,31 +109,38 @@ def test_append_progress_boundary_marks_turn(tmp_path):
     assert read_traces(run_log).count("## Progress boundary (turn 1)") == 1
 
 
-def test_select_traces_full_when_fits(tmp_path):
+def test_resume_background_full_traces_replace_progress_when_fits(tmp_path):
     run_log = tmp_path / "session-demo"
     run_log.mkdir()
     append_raw_round(run_log, 1, _round(user="hi", assistant="done"))
-    selected = select_traces_for_resume(run_log, model="kimi-k2.7-code", progress="")
-    assert '"hi"' in selected
+    background = build_resume_background(
+        run_log, model="kimi-k2.7-code", progress="## Turn 1\n- summarized"
+    )
+    assert '"hi"' in background
+    # Full raw traces fit, so the progress summary is redundant and dropped.
+    assert "summarized" not in background
 
 
-def test_select_traces_after_boundary_when_large(tmp_path, monkeypatch):
+def test_resume_background_progress_plus_post_boundary_when_large(tmp_path, monkeypatch):
     run_log = tmp_path / "session-demo"
     run_log.mkdir()
     append_raw_round(run_log, 1, _round(user="old turn " + "x" * 2000, assistant="old reply"))
     append_progress_boundary(run_log, 1)
     append_raw_round(run_log, 2, _round(user="new turn", assistant="new reply"))
-    # Tiny window: full file cannot fit, post-boundary can.
+    # Tiny window: full file cannot fit, progress + post-boundary can.
     monkeypatch.setattr(
         "langbridge_code.util.session_traces.model_context_window",
         lambda model: 600,
     )
-    selected = select_traces_for_resume(run_log, model="tiny", progress="")
-    assert "new turn" in selected
-    assert "old reply" not in selected
+    background = build_resume_background(
+        run_log, model="tiny", progress="## Turn 1\n- old turn summarized"
+    )
+    assert "old turn summarized" in background
+    assert "new turn" in background
+    assert "old reply" not in background
 
 
-def test_select_traces_head_trim_keeps_newest(tmp_path, monkeypatch):
+def test_resume_background_head_trim_keeps_newest(tmp_path, monkeypatch):
     run_log = tmp_path / "session-demo"
     run_log.mkdir()
     for index in range(6):
@@ -97,81 +149,20 @@ def test_select_traces_head_trim_keeps_newest(tmp_path, monkeypatch):
         "langbridge_code.util.session_traces.model_context_window",
         lambda model: 500,
     )
-    selected = select_traces_for_resume(run_log, model="tiny", progress="")
-    assert selected
-    assert "round 5" in selected
-    assert "round 0" not in selected
+    background = build_resume_background(run_log, model="tiny", progress="")
+    assert background
+    assert "round 5" in background
+    assert "round 0" not in background
 
 
-def test_select_traces_empty_file(tmp_path):
+def test_resume_background_empty_traces_returns_progress(tmp_path):
     run_log = tmp_path / "session-demo"
     run_log.mkdir()
-    assert select_traces_for_resume(run_log, model="kimi-k2.7-code", progress="") == ""
-
-
-def test_agent_trace_jsonl_per_instance(tmp_path):
-    from langbridge_code.util.session_traces import (
-        agent_trace_path,
-        append_agent_trace_round,
-        read_agent_trace,
+    assert build_resume_background(run_log, model="kimi-k2.7-code", progress="") == ""
+    assert (
+        build_resume_background(run_log, model="kimi-k2.7-code", progress="## Turn 1\n- note")
+        == "## Turn 1\n- note"
     )
-
-    run_log = tmp_path / "session-demo"
-    run_log.mkdir()
-    append_agent_trace_round(
-        run_log,
-        "Worker",
-        1,
-        3,
-        [{"role": "system", "content": "sys"}, *_round(user="do it", assistant="did it")],
-        step=2,
-    )
-    append_agent_trace_round(run_log, "Worker", 2, 3, _round(assistant="other instance"))
-
-    path_one = agent_trace_path(run_log, "Worker", 1)
-    assert path_one.name == "worker_1.trace.jsonl"
-    assert path_one.parent.name == "traces"
-
-    records = read_agent_trace(run_log, "Worker", 1)
-    assert len(records) == 1
-    assert records[0]["turn"] == 3
-    assert records[0]["step"] == 2
-    assert all(m.get("role") != "system" for m in records[0]["messages"])
-    assert records[0]["messages"][0]["content"] == "do it"
-
-    other = read_agent_trace(run_log, "Worker", 2)
-    assert len(other) == 1
-    assert other[0]["messages"][0]["content"] == "other instance"
-
-
-def test_finish_step_writes_agent_trace_for_any_label(tmp_path):
-    from langbridge_code.context.agent_context import finish_step, init_agent_context
-    from langbridge_code.util.session_traces import read_agent_trace
-
-    run_log = tmp_path / "session-demo"
-    run_log.mkdir()
-
-    class FakeSession:
-        api_key = None
-        model = None
-        label = "Reviewer"
-        run_log_path = run_log
-        turn_id = 1
-        step = 0
-
-    session = FakeSession()
-    messages, context, worklog_id = init_agent_context(
-        system_prompt="sys", run_log_path=run_log, label="Reviewer"
-    )
-    session.worklog_id = worklog_id
-    context.begin_turn("review this")
-    finish_step(context, [{"role": "assistant", "content": "looks good"}], session, 1000)
-
-    records = read_agent_trace(run_log, "Reviewer", worklog_id)
-    assert len(records) == 1
-    contents = [m.get("content") for m in records[0]["messages"]]
-    assert "review this" in contents
-    assert "looks good" in contents
 
 
 def test_append_progress_note_creates_and_appends(tmp_path):
@@ -181,7 +172,7 @@ def test_append_progress_note_creates_and_appends(tmp_path):
     assert "Fixed the bug" in result
     text = read_progress(run_log)
     assert "## Turn 1" in text
-    assert "- **Note:** Fixed the bug" in text
+    assert "### Note\nFixed the bug" in text
     append_progress_note(run_log, 1, "Tests pass")
     text = read_progress(run_log)
     assert text.index("Fixed the bug") < text.index("Tests pass")
@@ -193,7 +184,7 @@ def test_append_progress_note_survives_stub_rewrite(tmp_path):
     append_progress_note(run_log, 2, "Committed the plan")
     append_turn_progress_stub(run_log, 2, user="do it", assistant="Done.")
     text = read_progress(run_log)
-    assert "- **Note:** Committed the plan" in text
+    assert "### Note\nCommitted the plan" in text
     assert "**Out:** Done." in text
     assert text.count("## Turn 2") == 1
 
@@ -213,7 +204,7 @@ def test_append_progress_note_survives_enrich(tmp_path, monkeypatch):
     append_turn_progress("key", "model", run_log, 1, replace_turn=True)
     text = read_progress(run_log)
     assert "enriched" in text
-    assert "- **Note:** Key decision recorded" in text
+    assert "### Note\nKey decision recorded" in text
 
 
 def test_maybe_compact_progress_merges_middle_turns(tmp_path, monkeypatch):

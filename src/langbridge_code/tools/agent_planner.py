@@ -12,7 +12,7 @@ from langbridge_code.util.agent_worklog import (
     write_worklog_received,
     write_worklog_step,
 )
-from langbridge_code.context.common.budget import prepare_agent_messages
+from langbridge_code.context.common.budget import messages_with_budget_notice, prepare_agent_messages
 from langbridge_code.context.agent_context import finish_step, init_agent_context
 from langbridge_code.context.foreground import ForegroundTracker
 from langbridge_code.settings import (
@@ -30,38 +30,6 @@ from langbridge_code.tools import (
 from langbridge_code.agents.common.phases import emit_phase
 from langbridge_code.agents.system_prompt.planner import PLANNER_WORKFLOW_SUMMARY, planner_system_prompt
 from langbridge_code.tools.common.purpose import PURPOSE_PARAMETER
-from langbridge_code.agents.common.todo_list import (
-    load_tasks,
-    read_todo_list,
-    unfinished_count,
-    write_task_type_marker,
-    write_todo_list,
-)
-from langbridge_code.tools.todo_list import extract_plan_markdown
-
-
-def persist_task_type(run_log_path, task_type: str) -> None:
-    content = read_todo_list(run_log_path) or ""
-    write_todo_list(write_task_type_marker(content, task_type), run_log_path=run_log_path)
-
-
-def _unfinished_tasks(run_log_path, *, limit: int | None = None):
-    tasks = [task for task in load_tasks(run_log_path) if task.unfinished]
-    if limit is None:
-        return tasks
-    return tasks[:limit]
-
-
-def format_unfinished_todo_summary(run_log_path, *, limit: int = 5) -> str:
-    tasks = _unfinished_tasks(run_log_path)
-    if not tasks:
-        return ""
-    shown = tasks[:limit]
-    lines = [f"- {task.description}" for task in shown]
-    remaining = len(tasks) - len(shown)
-    if remaining > 0:
-        lines.append(f"- ... and {remaining} more")
-    return "\n".join(lines)
 
 
 PLANNER_TOOL_NAMES = (
@@ -94,12 +62,11 @@ AGENT_PLANNER_TOOL_SCHEMA = {
         "Offload plan research/drafting so repo exploration stays OUT of your "
         "main-agent context. You get ONE draft result back — not the planner's "
         "tool trace. Review that draft as if you wrote it; ask the user if "
-        "ambiguous; then update_plan. Do not dispatch agent_worker until "
-        "update_plan has committed. Blocked while an unfinished todo_list exists "
-        "unless you called clear_plan first or set replace_existing_plan=true "
-        "after the user confirmed replacing. When unfinished todos exist and the "
-        "user starts a new multi-step task, read_plan then ask whether to "
-        "continue / replace / /new before calling this."
+        "ambiguous; then write the final plan yourself to todo_list.md at the "
+        "workspace root (write tool). Do not dispatch agent_worker before "
+        "todo_list.md is written. If todo_list.md already holds an unfinished "
+        "plan, ask the user first whether to continue it, replace it, or start "
+        "fresh — do not silently overwrite."
     ),
     "parameters": {
         "type": "object",
@@ -113,39 +80,19 @@ AGENT_PLANNER_TOOL_SCHEMA = {
                 "type": "string",
                 "description": "Short 3-5 word title for logging.",
             },
-            "replace_existing_plan": {
-                "type": "boolean",
+            "task_name": {
+                "type": "string",
                 "description": (
-                    "Set true only after ask_user confirmed replacing the current "
-                    "unfinished session todo_list. Omit or false otherwise."
+                    "Stable name for this planning task (e.g. 'plan-wumpus-game'). "
+                    "Used to label the run; reuse the exact name when re-running "
+                    "the same planning task."
                 ),
             },
         },
-        "required": ["purpose", "prompt", "description"],
+        "required": ["purpose", "prompt", "description", "task_name"],
         "additionalProperties": False,
     },
 }
-
-
-def planner_replace_blocked_message(run_log_path) -> str | None:
-    remaining = unfinished_count(load_tasks(run_log_path))
-    if remaining == 0:
-        return None
-    summary = format_unfinished_todo_summary(run_log_path)
-    lines = [
-        "Tool error: This session already has an unfinished todo_list that "
-        f"agent_planner would overwrite ({remaining} item(s) remaining).",
-        "Call read_plan, then ask_user how to proceed before planning again.",
-        "If the user chooses to replace the plan, call clear_plan then "
-        "agent_planner (or agent_planner with replace_existing_plan=true), review "
-        "the draft, ask_user if unsure, then update_plan to commit.",
-        "If they want to continue the old plan, use agent_worker.",
-        "If they want the new task in a fresh session, tell them to run /new and "
-        "repeat the request there.",
-    ]
-    if summary:
-        lines.extend(["", "Unfinished items:", summary])
-    return "\n".join(lines)
 
 
 def run_planner(
@@ -181,18 +128,31 @@ def initial_plan_prompt(user_task: str) -> str:
         "Your final reply must start with PLAN_TASK_TYPE, then a ```markdown fenced\n"
         "block with the FULL plan: Desired end state, Success criteria,\n"
         "Key discoveries, Out of scope, Current state, Design options (if non-trivial),\n"
-        "Open questions, Todo list (each with <!-- depends: ... --> and <!-- verify: ... -->),\n"
-        "Changes required (file:line + code snippets when known).\n"
-        "You have no update_plan or ask_user — the main agent commits the plan.\n\n"
-        "Todo lines must be:\n"
-        "  - [ ] <description> <!-- depends: none|N,M --> <!-- verify: ... -->\n"
+        "Open questions, Todo list, Changes required (file:line pointers with one-line\n"
+        "intents; a short illustrative snippet only when it clarifies an interface —\n"
+        "do not write the implementation, the worker writes the code).\n"
+        "Keep supporting prose concise. Never shorten a task by dropping its\n"
+        "requirements, acceptance criteria, deliverables, verification, or boundaries.\n"
+        "You have no write access and no ask_user — the main agent writes the plan file.\n\n"
+        "Every todo is a complete task contract. Its checkbox and deps note are MANDATORY:\n"
+        "  - [ ] Task N: <reviewable deliverable> (deps: none | tasks N, M)\n"
+        "    - Objective: <specific outcome>\n"
+        "    - Detailed requirements: <all behavior and constraints>\n"
+        "    - Acceptance spec: <observable binary pass/fail criteria>\n"
+        "    - Deliverables: <files or artifacts>\n"
+        "    - Verify: <exact commands and manual checks>\n"
+        "    - Out of scope: <task-local exclusions>\n"
+        "Acceptance spec defines correct behavior; Verify explains how to prove it.\n"
+        "Reject vague or contradictory criteria instead of asking a worker to guess.\n"
+        "Write `deps: none` only when the todo can start immediately with no other\n"
+        "todo's output — e.g. a scaffold/setup todo blocks everything that edits\n"
+        "the files it creates. Todos sharing one file are almost never independent.\n"
         "Decide coding vs slide — entire todo_list is one type only.\n"
         "For coding: build and verify working software; no design docs unless asked.\n"
         "For slide: build the deck deliverable (.pptx); verify content and structure.\n"
         "Split independent edits into separate todos; file/function-level steps are fine.\n"
         "No padding or duplicates.\n"
-        "For 3+ coding implementation steps, end with <!-- integration --> verification.\n"
-        "Ready todos (depends satisfied) are dispatched together — no parallel marker.\n\n"
+        "For 3+ coding implementation steps, end with a final integration verification todo.\n\n"
         "After the fenced plan, add a brief ## Summary.\n\n"
         f"User task:\n{user_task}"
     )
@@ -206,38 +166,6 @@ def parse_plan_task_type(report: str) -> str | None:
             if value in {"coding", "slide", "presentation"}:
                 return "slide" if value in {"slide", "presentation"} else "coding"
     return None
-
-
-def refine_plan_prompt(
-    failed_task: str,
-    reason: str,
-    todo: str,
-    *,
-    task_type: str = "coding",
-) -> str:
-    return (
-        "The task below did not complete in the workflow outer loop. Replace ONLY "
-        "that task in the todo_list with 2-4 smaller steps. Each line must be "
-        "  - [ ] <description> <!-- depends: ... --> <!-- verify: <exact command> -->\n"
-        f"This is a {task_type} session — keep steps appropriate for that specialist.\n"
-        "The failed task's partial work was NOT reverted — it is still in the "
-        "working tree. Inspect it (git_status/git_diff/read_file) and write the "
-        "smaller steps against that half-done state: build on edits that are "
-        "sound, and add an explicit fix/cleanup step for edits that are wrong. "
-        "Say in each step what already exists so the worker does not redo it.\n"
-        "Keep plan sections (Desired end state, Out of scope, Key discoveries, etc.) "
-        "unchanged unless new evidence from read_file/grep requires updates.\n"
-        "If the failure reason contradicts your assumptions, grep/read_file to verify "
-        "before revising the plan.\n"
-        "Keep already-done items unchanged. Do not add steps that duplicate ones "
-        "already in the list, and do not introduce new design-doc/planning steps. "
-        "The smaller steps must directly address what went wrong below.\n"
-        "Put the FULL revised plan in a ```markdown fence in your final reply.\n"
-        "Do not ask the user — note ambiguities under Open questions.\n\n"
-        f"Current todo_list:\n{todo or '(empty)'}\n\n"
-        f"Failed task: {failed_task}\n\n"
-        f"What went wrong:\n{reason[:3000]}"
-    )
 
 
 class PlannerSession:
@@ -306,7 +234,7 @@ class PlannerSession:
                     lambda: create_model_response(
                         self.api_key,
                         self.model,
-                        self.messages,
+                        messages_with_budget_notice(self.messages, self.model),
                         tool_schemas=self.tool_schemas,
                         reasoning={"summary": "auto"},
                         label=self.label,
@@ -363,13 +291,8 @@ def dispatch_planner(
     turn_id,
     trace_sink=None,
     phase_sink=None,
-    replace_existing_plan=False,
     **kwargs,
 ):
-    if not replace_existing_plan:
-        blocked = planner_replace_blocked_message(run_log_path)
-        if blocked:
-            return blocked
     emit_phase(phase_sink, "planning")
     report = run_planner(
         api_key,
@@ -379,29 +302,28 @@ def dispatch_planner(
         run_log_path=run_log_path,
         turn_id=turn_id,
     )
-    plan_md = extract_plan_markdown(report)
     task_type = parse_plan_task_type(report)
     type_label = task_type or "unknown"
     review_lines = [
-        f"[{description or 'planner'}] Plan DRAFT ready (not committed).",
+        f"[{description or 'planner'}] Plan DRAFT ready (not written to disk).",
         f"Suggested PLAN_TASK_TYPE: {type_label}.",
         "",
         "Main agent MUST:",
-        "1. Review this draft as if you wrote it (scope, depends, verify, Open questions).",
-        "2. ask_user if anything is ambiguous — do not guess.",
-        "3. Call update_plan with the final markdown (edited as needed).",
-        "   Start the content with "
-        f"`<!-- task_type: {type_label if type_label in {'coding', 'slide'} else 'coding'} -->`.",
-        "4. Only then read_plan / agent_worker.",
+        "1. Review this draft as if you wrote it. Every task needs Objective, Detailed "
+        "requirements, Acceptance spec, Deliverables, Verify, Out of scope, and deps.",
+        "2. Reject vague or contradictory acceptance criteria; ask_user when code and "
+        "the request cannot resolve them — do not make a worker guess.",
+        "3. Write the final markdown (edited as needed) to todo_list.md at the "
+        "workspace root with the write tool.",
+        "4. Only then dispatch agent_worker. Copy one complete task contract "
+        "word-for-word into task_contract and put only new repository facts in "
+        "supplemental_context (pass task_type "
+        f"{type_label if type_label in {'coding', 'slide'} else 'coding'!r} on each call).",
     ]
-    if plan_md:
-        review_lines.append(f"Extracted draft length: {len(plan_md)} chars (see fenced plan below).")
-    else:
-        review_lines.append(
-            "No fenced plan found — recover the full markdown from the report, then update_plan."
-        )
     header = "\n".join(review_lines)
-    return f"{header}\n\n{report[:6000]}"
+    # Pass the planner's report through untruncated: cutting the draft mid-plan
+    # forces the main agent to reconstruct lost sections from memory.
+    return f"{header}\n\n{report}"
 
 
 def build_agent_planner_tool(
@@ -415,7 +337,8 @@ def build_agent_planner_tool(
     question_callback=None,
     **kwargs,
 ):
-    def agent_planner(prompt, description="", replace_existing_plan=False):
+    def agent_planner(prompt, description="", task_name=""):
+        del task_name  # accepted for a uniform subagent interface; planner keeps no task notes
         return dispatch_planner(
             prompt,
             description=description,
@@ -425,7 +348,6 @@ def build_agent_planner_tool(
             turn_id=turn_id,
             trace_sink=trace_sink,
             phase_sink=phase_sink,
-            replace_existing_plan=replace_existing_plan,
         )
 
     return agent_planner

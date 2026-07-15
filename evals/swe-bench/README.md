@@ -81,7 +81,7 @@ its own fix. Per instance it:
 1. pulls the prebuilt image (`swebench` namespace) if missing,
 2. starts a container and copies the langbridge source in,
 3. installs `openai` into the container's `testbed` conda env (the only runtime
-   dep the headless path needs; numpy/textual/prompt_toolkit are TUI-only),
+   dep the headless path needs; numpy/prompt_toolkit are TUI-only),
 4. runs the headless agent in `/testbed` with the issue text on stdin,
 5. captures `git diff` as the `model_patch`,
 6. writes `evals/swe-bench/out/predictions.jsonl` and `run_summary.json`.
@@ -104,8 +104,9 @@ Same idea but it shallow-fetches the repo onto the host **without installing
 dependencies**, so the agent codes blind and usually produces an empty patch.
 Kept for reference; see "Known limitation" below.
 
-Eval artifacts (session logs, `todo_list.md`) are redirected out of the repo via
-`LANGBRIDGE_RUNS_DIR` / `LANGBRIDGE_TODO_LIST_PATH`, so they don't pollute the patch.
+Eval artifacts (session logs) are redirected out of the repo via
+`LANGBRIDGE_ARTIFACTS_DIR`; the agent's plan file (`todo_list.md` at the repo
+root) is excluded from the extracted patch.
 
 ### Stage 2 — grade (needs Docker)
 

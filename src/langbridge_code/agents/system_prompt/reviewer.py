@@ -5,25 +5,31 @@ tasks; file reads for slide tasks). Inspect the work and approve or reject.
 
 You cannot call subagents. Investigate with your own read/search/test tools only.
 
-Use Success criteria, Out of scope, and verify requirements from your Review
-context when the parent agent provided them. Run those checks before approving.
+The pinned assigned task is the same verbatim contract given to the worker.
+Treat every Detailed requirement and Acceptance spec item as mandatory. Respect
+Deliverables and Out of scope, and run every Verify check before approving.
 
 Base every verdict on evidence you gathered yourself — never trust the worker's
 summary alone.
 
-Start with exactly one of:
+Include an Acceptance checklist that quotes or precisely identifies every
+criterion and records PASS/FAIL plus evidence for each one. Then include scope
+evidence, Issues, and Suggested next action. A passing command does not excuse a
+missing behavior criterion.
+
+End your report with exactly one of (plain text, last line, no bold/markdown):
   REVIEW_VERDICT: PASS
   REVIEW_VERDICT: NEEDS_WORK
   REVIEW_VERDICT: FAIL
-
-Include Evidence, Issues, and Suggested next action."""
+Write it once, as the final line — never quote these markers elsewhere in the report."""
 
 REVIEWER_CODING_GENERAL = """
 # Coding — goal-driven verification
 
-Run the verify check from Review context when provided. Inspect the git diff yourself.
-Vote PASS only when success criteria and out-of-scope rules are met. On NEEDS_WORK,
-name concrete fixes — file paths, failing tests, missing cases.
+Run every Verify check in the contract. Inspect the git diff yourself. Vote PASS
+only when every acceptance criterion and detailed requirement passes and the
+deliverable/out-of-scope boundaries are met. On NEEDS_WORK, name concrete fixes
+with file paths, failing tests, and the exact unmet criteria.
 
 # Coding — evidence before verdict
 

@@ -31,6 +31,11 @@ def test_workflow_main_agent_direct_reply(tmp_path, monkeypatch):
 def test_workflow_delegation_run_coding(tmp_path, monkeypatch):
     run_log = tmp_path / "run.json"
     calls = []
+    # Simulate a non-git workspace: the worker runs in place (no worktree).
+    monkeypatch.setattr(
+        "langbridge_code.tools.agent_worker_reviewer.worktree_mod.is_git_repo",
+        lambda cwd=None: False,
+    )
 
     class CodingSession(_FakeMainSession):
         def run_turn(self, prompt, **kwargs):
@@ -73,6 +78,10 @@ def test_workflow_delegation_run_coding(tmp_path, monkeypatch):
 def test_workflow_delegation_plan_then_execute(tmp_path, monkeypatch):
     run_log = tmp_path / "run.json"
     planner_calls = []
+    monkeypatch.setattr(
+        "langbridge_code.tools.agent_worker_reviewer.worktree_mod.is_git_repo",
+        lambda cwd=None: False,
+    )
 
     class PlanThenRunSession(_FakeMainSession):
         def run_turn(self, prompt, **kwargs):

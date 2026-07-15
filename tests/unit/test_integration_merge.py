@@ -1,51 +1,24 @@
-from langbridge_code.agents.common.todo_list import TodoTask, write_todo_list
 from langbridge_code.agents.common import worktree as worktree_mod
 from langbridge_code.tools.agent_worker_reviewer import (
     build_agent_worker_tool,
-    integration_pending_message,
-    is_integration_task,
     is_merge_task_prompt,
-    pending_integration_tasks,
 )
 
 
-def test_is_integration_task():
-    assert is_integration_task(
-        TodoTask("Verify merged codebase and run integration tests <!-- integration -->")
-    )
-    assert not is_integration_task(TodoTask("Build auth API"))
-
-
-def test_integration_pending_message_lists_main_agent_steps(tmp_path):
+def test_dispatch_worker_pass_instructs_main_agent_to_mark_todo(tmp_path, monkeypatch):
+    """No auto-check: the plan file is untouched and the reply tells the main
+    agent to mark the todo [x] itself before dispatching the next wave."""
     run_log = tmp_path / "run.json"
-    tasks = [
-        TodoTask("Build auth", done=True),
-        TodoTask("Verify merged codebase <!-- integration -->"),
-    ]
-    worktree_mod.record_branch(
-        run_log,
-        worktree_mod.WorktreeInfo("lb/session/t1-auth", tmp_path / "wt", "Build auth"),
-        "ready",
+    plan = "# Todo\n\n## Todo list\n- [ ] Create HTML slides\n- [ ] Browser verify\n"
+    (tmp_path / "todo_list.md").write_text(plan, encoding="utf-8")
+    monkeypatch.setattr(
+        "langbridge_code.agents.common.todo_list.plan_path",
+        lambda: tmp_path / "todo_list.md",
     )
-    message = integration_pending_message(tasks, ["Build auth"], run_log_path=run_log)
-    assert "Main agent next steps" in message
-    assert "merge_branch" in message
-    assert "agent_worker" in message
-    assert "lb/session/t1-auth" in message
-    assert "Verify merged codebase" in message
-
-
-def test_dispatch_worker_auto_marks_todo_on_pass(tmp_path, monkeypatch):
-    run_log = tmp_path / "run.json"
-    content = """# Todo
-
-## Todo list
-- [ ] Create HTML slides
-- [ ] Browser verify
-"""
-    from langbridge_code.agents.common import todo_list as common
-
-    common.write_todo_list(content, run_log_path=run_log)
+    monkeypatch.setattr(
+        "langbridge_code.tools.agent_worker_reviewer.worktree_mod.is_git_repo",
+        lambda cwd=None: False,
+    )
     monkeypatch.setattr(
         "langbridge_code.tools.agent_worker_reviewer.run_worker_reviewer_loop",
         lambda *args, **kwargs: (True, "REVIEW_VERDICT: PASS"),
@@ -69,16 +42,18 @@ def test_dispatch_worker_auto_marks_todo_on_pass(tmp_path, monkeypatch):
     )
 
     assert "Single-task completed" in reply
-    assert "Marked complete: Create HTML slides" in reply
-    updated = common.read_todo_list(run_log)
-    assert "- [x] Create HTML slides" in updated
-    assert "- [ ] Browser verify" in updated
+    assert "mark that line `[x]` yourself" in reply
+    assert (tmp_path / "todo_list.md").read_text(encoding="utf-8") == plan
 
 
 def test_dispatch_worker_does_not_auto_refine_plan(tmp_path, monkeypatch):
     run_log = tmp_path / "run.json"
     planner_calls = []
 
+    monkeypatch.setattr(
+        "langbridge_code.tools.agent_worker_reviewer.worktree_mod.is_git_repo",
+        lambda cwd=None: False,
+    )
     monkeypatch.setattr(
         "langbridge_code.tools.agent_worker_reviewer.run_worker_reviewer_loop",
         lambda *args, **kwargs: (False, "REVIEW_VERDICT: FAIL"),
@@ -106,20 +81,9 @@ def test_dispatch_worker_does_not_auto_refine_plan(tmp_path, monkeypatch):
     assert "stopped (review did not pass)" in reply
 
 
-def test_dispatch_ready_wave_worker_uses_worktree(tmp_path, monkeypatch):
-    monkeypatch.setattr("langbridge_code.settings.PARALLEL_AGENTS_ENABLED", True)
-    monkeypatch.setattr(
-        "langbridge_code.tools.agent_worker_reviewer.PARALLEL_AGENTS_ENABLED",
-        True,
-    )
+def test_dispatch_worker_uses_worktree_by_default(tmp_path, monkeypatch):
+    """A single sequential coding dispatch is isolated in a worktree too."""
     run_log = tmp_path / "run.json"
-    write_todo_list(
-        "# Todo\n\n"
-        "- [ ] Add auth <!-- depends: none -->\n"
-        "- [ ] Add billing <!-- depends: none -->\n"
-        "- [ ] Wire <!-- depends: 1, 2 -->\n",
-        run_log_path=run_log,
-    )
     info = worktree_mod.WorktreeInfo("lb/run/t1-auth", tmp_path / "wt", "Add auth")
     captured = {}
 
@@ -153,19 +117,103 @@ def test_dispatch_ready_wave_worker_uses_worktree(tmp_path, monkeypatch):
         target="ship",
     )
     reply = agent_worker(
-        prompt="Add auth <!-- depends: none -->",
+        prompt="Add auth",
         description="auth",
     )
 
     assert captured["status"] == "ready"
-    assert "Parallel worktree completed" in reply
+    assert "Worktree task completed" in reply
     assert "lb/run/t1-auth" in reply
+
+
+def test_dispatch_worker_failure_records_failed_branch_with_partial_work(tmp_path, monkeypatch):
+    run_log = tmp_path / "run.json"
+    info = worktree_mod.WorktreeInfo("lb/run/t1-auth", tmp_path / "wt", "Add auth")
+    captured = {}
+
+    monkeypatch.setattr(
+        "langbridge_code.tools.agent_worker_reviewer.worktree_mod.is_git_repo",
+        lambda cwd=None: True,
+    )
+    monkeypatch.setattr(
+        "langbridge_code.tools.agent_worker_reviewer.worktree_mod.create_worktree",
+        lambda *args, **kwargs: info,
+    )
+    monkeypatch.setattr(
+        "langbridge_code.tools.agent_worker_reviewer.worktree_mod.record_branch",
+        lambda run_log_path, wt_info, status: captured.update({"status": status}),
+    )
+    commits = []
+    monkeypatch.setattr(
+        "langbridge_code.tools.agent_worker_reviewer.commit_task",
+        lambda label, task, cwd=None: commits.append((label, cwd)),
+    )
+    monkeypatch.setattr(
+        "langbridge_code.tools.agent_worker_reviewer.run_worker_reviewer_loop",
+        lambda *args, **kwargs: (False, "REVIEW_VERDICT: FAIL"),
+    )
+    monkeypatch.setattr(
+        "langbridge_code.tools.agent_worker_reviewer.emit_phase",
+        lambda *args, **kwargs: None,
+    )
+
+    agent_worker = build_agent_worker_tool(
+        api_key="key",
+        model="model",
+        run_log_path=run_log,
+        turn_id=1,
+        messages=[],
+        target="ship",
+    )
+    reply = agent_worker(prompt="Add auth", description="auth")
+
+    assert captured["status"] == "failed"
+    assert commits == [("worker-partial", info.path)]
+    assert "Worktree task stopped" in reply
+    assert "partial work is committed on this branch" in reply
+
+
+def test_dispatch_worker_runs_in_place_outside_git_repo(tmp_path, monkeypatch):
+    run_log = tmp_path / "run.json"
+    created = []
+    monkeypatch.setattr(
+        "langbridge_code.tools.agent_worker_reviewer.worktree_mod.is_git_repo",
+        lambda cwd=None: False,
+    )
+    monkeypatch.setattr(
+        "langbridge_code.tools.agent_worker_reviewer.worktree_mod.create_worktree",
+        lambda *args, **kwargs: created.append(True),
+    )
+    monkeypatch.setattr(
+        "langbridge_code.tools.agent_worker_reviewer.run_worker_reviewer_loop",
+        lambda *args, **kwargs: (True, "REVIEW_VERDICT: PASS"),
+    )
+    monkeypatch.setattr(
+        "langbridge_code.tools.agent_worker_reviewer.emit_phase",
+        lambda *args, **kwargs: None,
+    )
+
+    agent_worker = build_agent_worker_tool(
+        api_key="key",
+        model="model",
+        run_log_path=run_log,
+        turn_id=1,
+        messages=[],
+        target="ship",
+    )
+    reply = agent_worker(prompt="Add auth", description="auth")
+
+    assert not created
+    assert "Single-task completed" in reply
 
 
 def test_is_merge_task_prompt():
     assert is_merge_task_prompt("Merge branch lb/session/t1-auth into main workspace")
     assert is_merge_task_prompt("Run git merge lb/foo/bar")
-    assert not is_merge_task_prompt("Add auth <!-- depends: none -->")
+    assert not is_merge_task_prompt("Add auth")
+    # Integration verification todos mention merged branches but are worker tasks.
+    assert not is_merge_task_prompt("Verify merged branches work together")
+    assert not is_merge_task_prompt("Verify merged codebase and run integration tests")
 
 
 def test_agent_worker_rejects_merge_prompts(tmp_path, monkeypatch):

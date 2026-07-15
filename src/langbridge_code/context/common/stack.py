@@ -30,7 +30,6 @@ from __future__ import annotations
 import copy
 
 from langbridge_code.context.common.budget import estimate_tokens
-from langbridge_code.context.debug import format_raws, record_prose_compression
 from langbridge_code.context.message import iter_tool_rounds
 from langbridge_code.context.prose import COMPACT_PROSE_PREFIX, compact_rounds_to_prose
 from langbridge_code.llm.model_context import model_context_window
@@ -309,14 +308,6 @@ class ContextStack:
         )
         if not merged.strip():
             return False
-        input_parts = []
-        if prior_prose:
-            input_parts.append(f"## Prior prose\n\n{prior_prose}")
-        input_parts.append(f"## Raw rounds\n\n{format_raws(batch)}")
-        record_prose_compression(
-            input_text="\n\n".join(input_parts),
-            output=merged,
-        )
         self.compact_prose = merged
         self.raw_rounds = self.raw_rounds[len(batch) :]
         return True

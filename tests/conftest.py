@@ -24,3 +24,12 @@ def _no_llm_prefetch(monkeypatch):
     )
     monkeypatch.setattr(fork_mod, "fork_one_pass", lambda *args, **kwargs: "")
     yield
+
+
+@pytest.fixture(autouse=True)
+def _isolated_plan_file(monkeypatch, tmp_path):
+    """Keep the session plan file (todo_list.md) out of the real workspace root."""
+    import langbridge_code.agents.common.todo_list as todo_list_mod
+
+    monkeypatch.setattr(todo_list_mod, "plan_path", lambda: tmp_path / "todo_list.md")
+    yield

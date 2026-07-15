@@ -10,6 +10,7 @@ from langbridge_code.settings import (
     BROWSER_WAIT_AFTER_LOAD_MS,
 )
 from langbridge_code.tools.common.purpose import PURPOSE_PARAMETER
+from langbridge_code.tools.common.runtime import ensure_playwright_browser
 from langbridge_code.tools.web import collapse_whitespace, truncate, validate_url
 
 TOOL_SCHEMAS = [
@@ -65,9 +66,10 @@ def tool(name):
 
 def _playwright_missing_message() -> str:
     return (
-        "Playwright browser is not ready. Run once after install:\n"
-        "  playwright install chromium\n"
-        "  playwright install-deps chromium   # Linux system libraries; needs sudo"
+        "Playwright browser is not ready. LangBridge installs "
+        "Chromium under .langbridge/runtime automatically; check the runtime "
+        "setup error above. On Linux, missing browser system libraries still "
+        "need to be provided by the host OS."
     )
 
 
@@ -78,6 +80,7 @@ def browse_webpage(
     timeout_seconds=BROWSER_DEFAULT_TIMEOUT_SECONDS,
     wait_after_load_ms=BROWSER_WAIT_AFTER_LOAD_MS,
 ):
+    ensure_playwright_browser()
     url = validate_url(url)
     limit = max(1, int(max_chars))
     timeout_ms = max(1000, min(int(timeout_seconds), BROWSER_MAX_TIMEOUT_SECONDS) * 1000)

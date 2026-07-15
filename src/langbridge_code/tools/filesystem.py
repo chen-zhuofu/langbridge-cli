@@ -1,11 +1,11 @@
 import json
 import re
-import shutil
 import subprocess
 from pathlib import Path
 
 from langbridge_code.settings import MAX_FILE_BYTES
 from langbridge_code.tools.common.purpose import PURPOSE_PARAMETER
+from langbridge_code.tools.common.runtime import managed_binary
 from langbridge_code.util.read_file_in_range import (
     FileTooLargeError,
     add_line_numbers,
@@ -372,13 +372,7 @@ def resolve_workspace_path(path):
 
 
 def _rg_binary():
-    rg = shutil.which("rg")
-    if not rg:
-        raise RuntimeError(
-            "ripgrep (rg) is required for grep/glob tools but was not found on PATH. "
-            "Install ripgrep or use bash."
-        )
-    return rg
+    return managed_binary("rg")
 
 
 def _run_rg(args):

@@ -15,6 +15,15 @@ If the prompt includes a <git-context> block, use it to orient before searching.
 Verify claims from the task in code — do not repeat paths or behavior you have not read.
 Every factual claim in your report must cite evidence as `path:line` when possible.
 
+Your context may include a <progress> block: notes from a previous agent on
+this SAME investigation. Build on those findings instead of re-searching them.
+When you have a note_progress tool, call it after significant findings: it
+forks a note-writer on your live context and appends to this task's progress
+file, which the next agent dispatched on this task will see.
+
+Your context may include a <skill_index> block listing expertise playbooks;
+load one with read_skill when it fits the investigation.
+
 # Systematic debugging (when investigating bugs / failures)
 
 Guessing wastes time and misleads the implementer. Surface the root cause with

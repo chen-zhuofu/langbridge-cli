@@ -55,7 +55,7 @@ DATASETS = {
 # Inside the container.
 CONTAINER_SRC = "/opt/langbridge/src"
 CONTAINER_ARTIFACTS = "/root/lb_artifacts"
-CONTAINER_LANGBRIDGE_ARTIFACTS = f"{CONTAINER_SRC}/langbridge_code/artifacts"
+CONTAINER_LANGBRIDGE_ARTIFACTS = "/root/lb_session_artifacts"
 CONTAINER_VENV = "/opt/lb-venv"
 AGENT_PYTHON = f"{CONTAINER_VENV}/bin/python"
 CONTAINER_PROBLEM = "/tmp/problem.txt"
@@ -130,8 +130,6 @@ def build_agent_env(api_key, model):
         "PYTHONPATH": CONTAINER_SRC,
         "LANGBRIDGE_API_PROVIDER": provider,
         "LANGBRIDGE_ARTIFACTS_DIR": CONTAINER_LANGBRIDGE_ARTIFACTS,
-        "LANGBRIDGE_RUNS_DIR": f"{CONTAINER_ARTIFACTS}/session-history",
-        "LANGBRIDGE_TODO_LIST_PATH": f"{CONTAINER_ARTIFACTS}/todo_list.md",
     }
     if provider == "moonshot":
         env["MOONSHOT_API_KEY"] = api_key
@@ -263,7 +261,8 @@ def run_instance(instance, namespace, artifacts_root, api_key, model, timeout):
 
         diff = container_exec(
             container,
-            f"cd {REPO_DIR} && git add -A && git diff --cached",
+            # The agent keeps its plan in todo_list.md at the repo root; keep it out of the patch.
+            f"cd {REPO_DIR} && git add -A -- ':!todo_list.md' && git diff --cached -- ':!todo_list.md'",
         )
         patch = diff.stdout or ""
     except Exception as failure:  # noqa: BLE001 - record any setup/runtime failure

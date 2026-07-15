@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from langbridge_code.settings import AGENT_STATE_DIR, WORKSPACE_ROOT
+from langbridge_code.tools.common.runtime import managed_binary
 
 
 @dataclass
@@ -17,7 +18,7 @@ class WorktreeInfo:
 
 def _run_git(*args, cwd=None):
     return subprocess.run(
-        ["git", *args],
+        [managed_binary("git"), *args],
         cwd=cwd or WORKSPACE_ROOT,
         capture_output=True,
         text=True,
@@ -138,9 +139,10 @@ def create_worktree(run_log_path, index: int, description: str) -> WorktreeInfo:
 def remove_worktree(info: WorktreeInfo, *, force: bool = False) -> None:
     if not info.path.exists():
         return
-    args = ["worktree", "remove", str(info.path)]
+    args = ["worktree", "remove"]
     if force:
-        args.insert(1, "--force")
+        args.append("--force")
+    args.append(str(info.path))
     _run_git(*args)
     if force:
         _run_git("branch", "-D", info.branch)

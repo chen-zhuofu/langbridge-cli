@@ -13,11 +13,11 @@ ASK_USER_TOOL_SCHEMA = {
         "plausible assumptions as options; the UI always adds a 4th 'Other' choice. "
         "Phrase the question and options in the user's language. Do not use for "
         "trivial choices you can decide yourself. Do not use when the user only "
-        "says 继续/continue/resume and read_plan shows unchecked todos — resume "
-        "that plan via agent_worker instead. When an unfinished todo_list exists "
-        "and the user explicitly starts a different multi-step project this turn, "
-        "ask whether to continue the old plan, replace it (clear_plan then "
-        "agent_planner + update_plan), or start fresh (/new)."
+        "says 继续/continue/resume and todo_list.md shows unchecked todos — resume "
+        "that plan via agent_worker instead. When todo_list.md holds an unfinished "
+        "plan and the user explicitly starts a different multi-step project this "
+        "turn, ask whether to continue the old plan, replace it (agent_planner, "
+        "then overwrite todo_list.md), or start fresh (/new)."
     ),
     "parameters": {
         "type": "object",

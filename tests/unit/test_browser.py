@@ -7,6 +7,14 @@ import pytest
 from langbridge_code.tools.browser import browse_webpage
 
 
+@pytest.fixture(autouse=True)
+def _browser_runtime_ready(monkeypatch):
+    monkeypatch.setattr(
+        "langbridge_code.tools.browser.ensure_playwright_browser",
+        lambda: None,
+    )
+
+
 class _FakePage:
     url = "https://example.com/app"
 

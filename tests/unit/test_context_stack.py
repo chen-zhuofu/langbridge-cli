@@ -110,32 +110,6 @@ def test_no_compact_when_few_rounds_even_over_budget(stack, monkeypatch):
     assert len(stack.raw_rounds) == 2
 
 
-def test_prose_compression_persisted_to_debug(stack, tmp_path, monkeypatch):
-    monkeypatch.setattr("langbridge_code.context.debug.CONTEXT_DEBUG_PERSIST", True)
-    monkeypatch.setattr(
-        "langbridge_code.context.common.stack.model_context_window",
-        lambda _model: 100,
-    )
-    session_dir = tmp_path / "session-test-2026-07-09T120000"
-    session_dir.mkdir()
-    (session_dir / "traces").mkdir()
-    (session_dir / "debug" / "2026-07-09T120000.00").mkdir(parents=True)
-    from langbridge_code.util.agent_debug import set_agent_debug
-    from langbridge_code.util.trace_log import begin_trace
-
-    begin_trace(session_dir, "2026-07-09T120000.00")
-    set_agent_debug("Worker", 1)
-    stack.start_turn("task")
-    for index in range(6):
-        stack.complete_step(_tool_step(f"c{index}", "grep", "x" * 200))
-    stack.maybe_advance(api_key="k", model="test-model", budget_tokens=40)
-
-    debug_dir = session_dir / "debug" / "2026-07-09T120000.00"
-    files = list(debug_dir.glob("worker_1_prose_*_output.md"))
-    assert len(files) == 1
-    assert "rounds folded" in files[0].read_text(encoding="utf-8")
-
-
 def test_user_message_attached_to_first_step_only(stack):
     stack.start_turn("hello")
     stack.complete_step(_tool_step("c0", "grep", "one"))

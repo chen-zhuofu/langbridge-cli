@@ -1,15 +1,32 @@
 {
-  "model": "kimi-k2.7-code",
+  "model": null,
   "api": {
     "provider": "moonshot",
-    "base_url": "https://api.moonshot.ai/v1",
+    "providers": {
+      "moonshot": {
+        "base_url": "https://api.moonshot.ai/v1",
+        "model": "kimi-k2.7-code"
+      },
+      "openai": {
+        "base_url": "",
+        "model": "gpt-5.1-codex"
+      },
+      "deepseek": {
+        "base_url": "https://api.deepseek.com",
+        "model": "deepseek-v4-pro",
+        "agent_models": {
+          "explorer": "deepseek-v4-flash"
+        }
+      }
+    },
     "timeout_seconds": 120,
     "max_retries": 2,
     "streaming_enabled": true
   },
   "api_keys": {
     "moonshot": null,
-    "openai": null
+    "openai": null,
+    "deepseek": null
   },
   "max_guidance": 12,
   "agent": {
@@ -29,7 +46,7 @@
     "workflow_outer_multiplier": 2,
     "max_parallel_tool_calls": 4,
     "max_parallel_workers": 2,
-    "parallel_agents_enabled": false
+    "parallel_agents_enabled": true
   },
   "goal": {
     "default_max_turns": 20,
@@ -44,12 +61,11 @@
     "max_session_summary_input_chars": 4000,
     "compact_raw_keep": 11,
     "compact_fraction": 0.4,
-    "progress_max_fraction": 0.4,
+    "progress_max_fraction": 0.1,
     "traces_resume_max_fraction": 0.3,
     "compact_use_llm": true,
     "compact_prose_target_chars": 16000,
-    "progress_note_reminder_rounds": 10,
-    "context_debug_persist": true
+    "progress_note_reminder_rounds": 10
   },
   "tools": {
     "filesystem": {
@@ -57,12 +73,12 @@
       "max_search_file_bytes": 200000
     },
     "execution": {
-      "max_output_chars": 20000,
+      "max_output_chars": 30000,
       "default_timeout_seconds": 60,
       "max_timeout_seconds": 300
     },
     "testing": {
-      "max_output_chars": 20000,
+      "max_output_chars": 30000,
       "default_timeout_seconds": 60,
       "max_timeout_seconds": 300
     },
@@ -90,8 +106,6 @@
   },
   "paths": {
     "agent_state_dir": null,
-    "artifacts_dir": null,
-    "runs_dir": null,
-    "todo_list_path": null
+    "artifacts_dir": null
   }
 }

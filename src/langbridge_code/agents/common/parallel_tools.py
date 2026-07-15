@@ -15,7 +15,6 @@ PARALLEL_TOOL_NAMES = frozenset(
         "grep",
         "read_webpage",
         "browse_webpage",
-        "read_plan",
         "read_skill",
     }
 )

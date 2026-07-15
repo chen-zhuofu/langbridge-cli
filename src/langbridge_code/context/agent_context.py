@@ -126,15 +126,7 @@ def finish_step(context: AgentContextManager, step_items: list[dict], session, b
         return
     label = getattr(session, "label", "")
     turn_id = getattr(session, "turn_id", 0) or 0
-    from langbridge_code.util.session_traces import append_agent_trace_round, append_raw_round
-
-    append_agent_trace_round(
-        run_log_path,
-        label,
-        getattr(session, "worklog_id", None),
-        turn_id,
-        rounds[-1],
-        step=getattr(session, "step", None),
-    )
     if label == "LangBridge":
+        from langbridge_code.util.session_traces import append_raw_round
+
         append_raw_round(run_log_path, turn_id, rounds[-1])

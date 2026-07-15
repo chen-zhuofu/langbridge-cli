@@ -20,7 +20,8 @@ from langbridge_code.util.agent_worklog import (
     write_worklog_received,
     write_worklog_step,
 )
-from langbridge_code.context.common.budget import prepare_agent_messages
+from langbridge_code.context.common.budget import messages_with_budget_notice, prepare_agent_messages
+from langbridge_code.tools.approval import approval_reason
 from langbridge_code.context.message import recent_chat_turns
 from langbridge_code.context.agent_context import finish_step, init_agent_context
 from langbridge_code.context.foreground import ForegroundTracker
@@ -31,19 +32,11 @@ from langbridge_code.settings import (
     MAX_REVIEWER_STEPS,
     MAX_WORKER_SECONDS,
     MAX_WORKER_STEPS,
-    PARALLEL_AGENTS_ENABLED,
     WORKSPACE_ROOT,
+    model_for_agent,
 )
 from langbridge_code.agents.common.todo_list import (
-    TodoTask,
     clean_task_text,
-    load_tasks,
-    read_task_type,
-    ready_task_indices,
-    render_todo_list,
-    resolve_single_worker_task,
-    write_task_type_marker,
-    write_todo_list,
 )
 from langbridge_code.tools import (
     FILE_READ_TOOL_NAMES,
@@ -59,6 +52,7 @@ from langbridge_code.tools import (
     testing,
 )
 from langbridge_code.tools.common.purpose import PURPOSE_PARAMETER, without_purpose
+from langbridge_code.tools.common.runtime import managed_binary
 from langbridge_code.skills import (
     ensure_skill_index_block,
     normalize_task_type,
@@ -66,8 +60,9 @@ from langbridge_code.skills import (
     worker_skill_catalog,
 )
 from langbridge_code.agents.common import worktree as worktree_mod
+from langbridge_code.agents.common.task_progress import TaskProgress
 from langbridge_code.agents.common.workspace import workspace_scope
-from langbridge_code.tools import todo_list as plan_tools
+from langbridge_code.tools.note_progress import TASK_NOTE_PROGRESS_TOOL_SCHEMA
 from langbridge_code.training.optimizer_trace import append_event
 
 # --- Worker toolkits by task type ---
@@ -78,7 +73,7 @@ CODE_WORKER_TOOL_NAMES = (
     | SHELL_TOOL_NAMES
     | GIT_READ_TOOL_NAMES
     | GIT_WRITE_TOOL_NAMES
-    | {"run_tests", "read_skill", "read_plan", "lsp"}
+    | {"run_tests", "read_skill", "lsp"}
 )
 CODE_WORKER_TOOL_SCHEMAS = [
     schema
@@ -89,7 +84,6 @@ CODE_WORKER_TOOL_SCHEMAS = [
         + lsp.TOOL_SCHEMAS
         + testing.TOOL_SCHEMAS
         + skills.TOOL_SCHEMAS
-        + plan_tools.TOOL_SCHEMAS
     )
     if schema["name"] in CODE_WORKER_TOOL_NAMES
 ]
@@ -102,7 +96,6 @@ CODE_WORKER_TOOLS = {
         | lsp.TOOLS
         | testing.TOOLS
         | skills.TOOLS
-        | plan_tools.TOOLS
     ).items()
     if name in CODE_WORKER_TOOL_NAMES
 }
@@ -111,7 +104,7 @@ WORKER_WRITE_TOOLS = FILE_WRITE_TOOL_NAMES | GIT_WRITE_TOOL_NAMES
 SLIDE_WORKER_TOOL_NAMES = (
     FILE_READ_TOOL_NAMES
     | {"write", "edit_file", "multi_edit", "apply_patch"}
-    | {"read_skill", "read_plan", "lsp"}
+    | {"read_skill", "lsp"}
     | GIT_READ_TOOL_NAMES
 )
 SLIDE_WORKER_TOOL_SCHEMAS = [
@@ -121,14 +114,13 @@ SLIDE_WORKER_TOOL_SCHEMAS = [
         + git_tools.TOOL_SCHEMAS
         + lsp.TOOL_SCHEMAS
         + skills.TOOL_SCHEMAS
-        + plan_tools.TOOL_SCHEMAS
     )
     if schema["name"] in SLIDE_WORKER_TOOL_NAMES
 ]
 SLIDE_WORKER_TOOLS = {
     name: tool
     for name, tool in (
-        filesystem.TOOLS | git_tools.TOOLS | lsp.TOOLS | skills.TOOLS | plan_tools.TOOLS
+        filesystem.TOOLS | git_tools.TOOLS | lsp.TOOLS | skills.TOOLS
     ).items()
     if name in SLIDE_WORKER_TOOL_NAMES
 }
@@ -171,92 +163,12 @@ _APPROVAL_LOCK = threading.Lock()
 _WORKTREE_INDEX_LOCK = threading.Lock()
 _worktree_index_by_session: dict[str, int] = {}
 
-_INTEGRATION_MARKER = re.compile(r"<!--\s*integration\s*-->", re.IGNORECASE)
-_VERIFY_MARKER = re.compile(r"<!--\s*verify:\s*(?P<cmd>[^>]+)\s*-->", re.IGNORECASE)
-_HTML_COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
-
-
-def save_tasks(tasks: list[TodoTask], run_log_path, title: str = "Todo") -> str:
-    content = render_todo_list(tasks, title=title)
-    task_type = read_task_type(run_log_path)
-    if task_type:
-        content = write_task_type_marker(content, task_type)
-    write_todo_list(content, run_log_path=run_log_path)
-    return content
-
-
-def mark_done(tasks: list[TodoTask], target: TodoTask) -> None:
-    for task in tasks:
-        if task is target or task.description == target.description:
-            task.done = True
-            return
-
-
-def is_integration_task(task: TodoTask) -> bool:
-    blob = f"{task.description}\n{task.note}"
-    if _INTEGRATION_MARKER.search(blob):
-        return True
-    lowered = clean_task_description(task).lower()
-    return (
-        lowered.startswith("verify merged")
-        or ("merge" in lowered and "branch" in lowered)
-        or ("resolve" in lowered and "conflict" in lowered)
-    )
-
-
-def clean_task_description(task: TodoTask) -> str:
-    return clean_task_text(task.description)
-
-
-def task_verify_command(task: TodoTask) -> str:
-    blob = f"{task.description}\n{task.note}"
-    match = _VERIFY_MARKER.search(blob)
-    if not match:
-        return ""
-    return match.group("cmd").strip()
-
-
-def ready_implementation_tasks(tasks: list[TodoTask]) -> list[TodoTask]:
-    """Unfinished non-integration todos whose depends are satisfied."""
-    return [
-        tasks[index]
-        for index in ready_task_indices(tasks)
-        if not is_integration_task(tasks[index])
-    ]
-
-
-def next_parallel_batch(tasks: list[TodoTask], max_workers: int) -> list[TodoTask]:
-    """Ready wave of 2+ implementation todos (topology-derived concurrency)."""
-    batch = ready_implementation_tasks(tasks)
-    if len(batch) < 2:
-        return []
-    return batch[: max(1, min(max_workers, len(batch)))]
-
-
-def task_in_ready_parallel_wave(task: str, run_log_path) -> bool:
-    """True when this prompt matches a ready wave of 2+ concurrent implementation todos."""
-    if run_log_path is None:
-        return False
-    tasks = load_tasks(run_log_path)
-    batch = next_parallel_batch(tasks, max_workers=16)
-    if len(batch) < 2:
-        return False
-    needle = clean_task_text(task).lower()
-    if not needle:
-        return False
-    for item in batch:
-        desc = clean_task_text(item.description).lower()
-        if desc == needle or needle in desc or desc in needle:
-            return True
-    return False
-
-
-def pending_integration_tasks(tasks: list[TodoTask]) -> list[TodoTask]:
-    return [task for task in tasks if task.unfinished and is_integration_task(task)]
-
-
 def is_merge_task_prompt(task: str) -> bool:
     cleaned = clean_task_text(task).lower()
+    # Integration verification todos ("Verify merged ...") are worker tasks,
+    # not merges, even when they mention merged branches.
+    if cleaned.startswith("verify"):
+        return False
     if "git merge" in cleaned:
         return True
     if "merge" in cleaned and "branch" in cleaned:
@@ -266,85 +178,77 @@ def is_merge_task_prompt(task: str) -> bool:
     return bool(re.search(r"\blb/", task or "", re.IGNORECASE) and "merge" in cleaned)
 
 
-def integration_pending_message(tasks: list[TodoTask], completed: list[str], *, run_log_path=None) -> str:
-    integration = pending_integration_tasks(tasks)
-    lines = [
-        "Implementation tasks are complete. Merge the branches yourself, then delegate integration.",
-        "",
-        "Main agent next steps:",
-        "1. Call merge_branch once per ready feature branch (main workspace).",
-        "2. On conflicts, resolve the files yourself (edit_file + git add + git commit), "
-        "then call merge_branch again to confirm.",
-        "3. When the tree is clean, delegate agent_worker for the integration verification todo.",
-        "",
-    ]
-    if run_log_path is not None:
-        branches = worktree_mod.ready_branches(run_log_path)
-        if branches:
-            lines.append("Ready branches to merge:")
-            lines.extend(f"- {branch}" for branch in branches)
-            lines.append("")
-    if completed:
-        lines.extend(["Completed implementation:", *[f"- {item}" for item in completed], ""])
-    if integration:
-        lines.append("Pending integration todo(s):")
-        lines.extend(f"- {task.description}" for task in integration)
-    return "\n".join(lines).strip()
-
-
 AGENT_WORKER_TOOL_SCHEMA = {
     "type": "function",
     "name": "agent_worker",
     "description": (
         "Launch the worker-reviewer subagent for exactly one todo subtask. "
-        "Pass a focused prompt for a single unchecked item from read_plan (description, "
-        "verify comment, and relevant Changes required snippets). "
-        "The worker starts with zero context: include the exploration already done "
-        "(by you or agent_explorer) that the subtask needs — exact file paths, key "
-        "functions/classes, line ranges, and how the pieces connect — so it does "
-        "not re-explore what is already known. "
-        "Rejected if the prompt lists multiple todos, checkboxes, or branches. "
-        "Do not paste the entire plan or multiple todos — one subtask per call. "
-        "Worker may read_plan for read-only context but implements only your assigned subtask. "
-    "When read_plan shows multiple Ready todos (depends satisfied — often "
-    "<!-- depends: none -->), the main agent may call agent_worker several times "
-    "in one turn; concurrent tasks run in isolated git worktrees. "
-    "After parallel work, read_plan lists ready branches — merge them yourself with "
-    "the merge_branch tool (never via agent_worker). "
-    "Do not dispatch a todo until every number listed in its <!-- depends: ... --> is [x]. "
-    "On reviewer PASS the matched todo is marked complete automatically. "
-    "On failure, partial work stays in the working tree (nothing is reverted) and "
-    "the summary describes the leftover state. You decide what happens next: "
-    "re-dispatch agent_worker to continue from that partial state, or split the "
-    "task via agent_planner/update_plan — a split plan must account for the "
-        "partial changes already on disk. Returns a final summary only. "
-        "After you merged all ready branches with merge_branch, delegate integration "
-        "verification via agent_worker."
+        "The worker starts with ZERO context and never reads your plan file: the "
+        "task_contract must be a word-for-word copy of that task's complete "
+        "markdown block in todo_list.md. Put exploration findings — exact file "
+        "paths, key functions/classes with line ranges, relevant snippets, and "
+        "how the pieces connect — in supplemental_context, without changing the "
+        "contract. "
+        "One subtask per call — do not paste the entire plan or bundle todos. "
+        "Every coding dispatch — single or batched — runs in its own isolated git "
+        "worktree branched from HEAD, and the result reports its feature branch. "
+        "Merge each ready branch yourself with the merge_branch tool (never via "
+        "agent_worker) before dispatching todos that depend on it. When several "
+        "todos in todo_list.md are independent and unblocked, you may call "
+        "agent_worker several times in one turn. "
+        "Do not dispatch a todo whose prerequisites are still unchecked. "
+        "The worker never touches todo_list.md — you own every task's status "
+        "(unassigned, dispatched/in progress, finished): on reviewer PASS, mark "
+        "the matching line `[x]` yourself with edit_file. "
+        "On failure, partial work is committed on the task's worktree branch "
+        "(the main workspace is untouched) and the summary describes the leftover "
+        "state. You decide what happens next: merge_branch that branch and "
+        "re-dispatch agent_worker to continue from the partial state, or discard "
+        "it and revise todo_list.md (edit_file). "
+        "Returns a final summary only."
     ),
     "parameters": {
         "type": "object",
         "properties": {
             "purpose": PURPOSE_PARAMETER,
-            "prompt": {
+            "task_contract": {
                 "type": "string",
                 "description": (
-                    "Full task description for the subagent. Include known "
-                    "exploration findings the task needs: file paths, key "
-                    "functions/classes with line numbers, and relevant snippets "
-                    "— the worker cannot see your chat or explorer traces."
+                    "Word-for-word copy of exactly one complete task block from "
+                    "todo_list.md, including title, Objective, Detailed requirements, "
+                    "Acceptance spec, Deliverables, Verify, Out of scope, and deps. "
+                    "Do not summarize, rewrite, or omit any part."
+                ),
+            },
+            "supplemental_context": {
+                "type": "string",
+                "description": (
+                    "Additional facts discovered after the contract was written: "
+                    "exact paths, line ranges, relevant snippets, and how components "
+                    "connect. Must not override or reinterpret the task contract."
                 ),
             },
             "description": {
                 "type": "string",
                 "description": "Short 3-5 word title for logging.",
             },
+            "task_name": {
+                "type": "string",
+                "description": (
+                    "Stable name for this todo/task (e.g. 'task-3-game-state'). "
+                    "Names the task's progress note file: the worker's notes are "
+                    "saved under it and shown to the next worker dispatched with "
+                    "the SAME task_name — reuse the exact name when re-dispatching "
+                    "or continuing a task so it resumes from those notes."
+                ),
+            },
             "task_type": {
                 "type": "string",
                 "enum": ["coding", "slide"],
-                "description": "Task type from read_plan (default coding).",
+                "description": "Task type of this subtask (default coding).",
             },
         },
-        "required": ["purpose", "prompt", "description"],
+        "required": ["purpose", "task_contract", "description", "task_name"],
         "additionalProperties": False,
     },
 }
@@ -397,14 +301,34 @@ class WorkerReviewerLoopBudget:
         return self.steps_left() <= 0 or self.timed_out()
 
 
+def _last_status_line(report: str, prefix: str) -> str:
+    """Last line starting with `prefix`, markdown emphasis stripped, spaces squashed.
+
+    Prompts ask for the marker as the LAST line of the report, matching how
+    models naturally write (reasoning first, conclusion last). Taking the final
+    occurrence also stays lenient: an early strict requirement (line 1 only)
+    turned a real PASS with a prose preamble into "needs work" feedback and
+    ping-ponged the loop forever. Reports from older checkpoints that still put
+    the marker on line 1 parse fine as long as it appears once.
+    """
+    match = ""
+    for line in (report or "").splitlines():
+        cleaned = " ".join(line.strip().strip("*_`#").split()).lower()
+        if cleaned.startswith(prefix):
+            match = cleaned
+    return match
+
+
 def worker_ready_for_review(report):
-    first_line = report.strip().splitlines()[0].strip().lower() if report.strip() else ""
-    return first_line == "worker_status: ready_for_review"
+    return _last_status_line(report, "worker_status:") == "worker_status: ready_for_review"
+
+
+def worker_blocked(report):
+    return _last_status_line(report, "worker_status:") == "worker_status: blocked"
 
 
 def reviewer_review_passed(report):
-    first_line = report.strip().splitlines()[0].strip().lower() if report.strip() else ""
-    return first_line == "review_verdict: pass"
+    return _last_status_line(report, "review_verdict:") == "review_verdict: pass"
 
 
 def build_code_worker_toolkit(
@@ -464,6 +388,7 @@ def new_worker_session(
     turn_id=None,
     write_guard=None,
     phase_sink=None,
+    task_name="",
 ):
     tools, schemas = build_worker_toolkit(
         task_type=task_type,
@@ -485,6 +410,7 @@ def new_worker_session(
         run_log_path=run_log_path,
         turn_id=turn_id,
         write_guard=write_guard,
+        task_name=task_name,
     )
 
 
@@ -568,11 +494,10 @@ class WorkerSession:
         run_log_path=None,
         turn_id=None,
         write_guard=None,
+        task_name="",
     ):
         self.api_key = api_key
         self.model = model
-        self.tool_schemas = tool_schemas
-        self.tools = tools
         self.task_type = normalize_task_type(task_type)
         self.label = "Worker"
         self.trace_sink = trace_sink
@@ -586,6 +511,15 @@ class WorkerSession:
             run_log_path=run_log_path,
             label=self.label,
         )
+        self.task_progress = TaskProgress(
+            api_key, model, run_log_path, task_name, label=self.label
+        )
+        self.tools = dict(tools)
+        self.tool_schemas = list(tool_schemas)
+        if self.task_progress.enabled:
+            self.tools["note_progress"] = self.task_progress.write_note
+            self.tool_schemas.append(TASK_NOTE_PROGRESS_TOOL_SCHEMA)
+            self.task_progress.attach(self.context.stack, self.messages)
         self.tool_history = []
         self.step = 0
         self.assigned_task: str | None = None
@@ -667,7 +601,7 @@ class WorkerSession:
             lambda: create_model_response(
                 self.api_key,
                 self.model,
-                self.messages,
+                messages_with_budget_notice(self.messages, self.model),
                 tool_schemas=self.tool_schemas,
                 reasoning={"summary": "auto"},
                 label=self.label,
@@ -703,6 +637,7 @@ class WorkerSession:
             )
         self.step += 1
         finish_step(self.context, step_items, self, budget)
+        self.task_progress.maybe_remind(self.context)
         self._publish_foreground()
         return StepOutcome.TOOL, None
 
@@ -829,7 +764,7 @@ class ReviewerSession:
             lambda: create_model_response(
                 self.api_key,
                 self.model,
-                self.messages,
+                messages_with_budget_notice(self.messages, self.model),
                 tool_schemas=self.tool_schemas,
                 reasoning={"summary": "auto"},
                 label=self.label,
@@ -900,14 +835,13 @@ def run_worker_tool_call(call, tools, approval_callback=None, write_guard=None, 
         arguments = without_purpose(json.loads(call.get("arguments") or "{}"))
         if name not in tools:
             raise ValueError(f"Unknown Worker tool: {name}")
-        if name == "read_plan" and run_log_path is not None:
-            arguments["run_log_path"] = run_log_path
         if write_guard is not None and name in WORKER_WRITE_TOOLS:
             guard_error = write_guard(name, arguments)
             if guard_error:
                 raise PermissionError(guard_error)
-        if name in WORKER_WRITE_TOOLS and not approve_worker_tool_write(name, arguments, approval_callback):
-            raise PermissionError(f"{name} was not approved")
+        risk = approval_reason(name, arguments)
+        if risk and not approve_worker_tool_write(name, arguments, approval_callback):
+            raise PermissionError(f"{name} was not approved ({risk})")
         output = tools[name](**arguments)
     except Exception as error:
         output = f"Tool error: {error}"
@@ -925,9 +859,9 @@ def approve_worker_write_tool(name, arguments):
     if not sys.stdin.isatty():
         return False
 
-    print(f"\nApprove worker write tool: {name}")
+    print(f"\nApprove high-risk worker tool: {name}")
     print(json.dumps(arguments, ensure_ascii=False, indent=2))
-    answer = input("Allow worker to run this write tool? [y/N] ")
+    answer = input("Allow worker to run this high-risk tool? [y/N] ")
     if answer.strip().lower() in {"y", "yes"}:
         return True
     raise control.TurnAborted(f"{name} was denied.")
@@ -985,7 +919,7 @@ def build_task_context(messages, target, project=""):
 def _run_git(*args, cwd=None):
     cwd = cwd or WORKSPACE_ROOT
     return subprocess.run(
-        ["git", *args],
+        [managed_binary("git"), *args],
         cwd=cwd,
         capture_output=True,
         text=True,
@@ -1045,7 +979,7 @@ def partial_work_note(snapshot, cwd=None) -> str:
         "\n\nPartial work left in the working tree (not reverted):\n"
         + body[:2000]
         + "\nMain agent decides: re-dispatch agent_worker to continue from this state, "
-        "or split the task via agent_planner/update_plan accounting for these changes."
+        "or revise todo_list.md (edit_file) into smaller steps accounting for these changes."
     )
 
 
@@ -1111,6 +1045,7 @@ def run_worker_reviewer_loop(
     approval_callback=None,
     phase_sink=None,
     cwd=None,
+    task_name="",
 ) -> tuple[bool, str]:
     """One loop from LangBridge: worker until ready → reviewer → repeat; shared step budget."""
     normalized = normalize_task_type(task_type)
@@ -1127,10 +1062,11 @@ def run_worker_reviewer_loop(
         run_log_path=run_log_path,
         turn_id=turn_id,
         phase_sink=phase_sink,
+        task_name=task_name,
     )
     reviewer = new_reviewer_session(
         api_key,
-        model,
+        model_for_agent("reviewer", model),
         task_type=normalized,
         trace_sink=trace_sink,
         run_log_path=run_log_path,
@@ -1274,6 +1210,7 @@ def _run_worker_in_worktree(
     run_log_path,
     turn_id,
     approval_callback,
+    task_name="",
 ) -> tuple[bool, str]:
     task_text = clean_task_text(task)
     scoped_context = "\n\n".join(
@@ -1294,6 +1231,7 @@ def _run_worker_in_worktree(
             turn_id=turn_id,
             approval_callback=approval_callback,
             cwd=worktree_info.path,
+            task_name=task_name,
         )
 
 
@@ -1311,16 +1249,20 @@ def dispatch_worker(
     trace_sink=None,
     phase_sink=None,
     approval_callback=None,
+    task_name="",
 ):
-    normalized = normalize_task_type(task_type or read_task_type(run_log_path) or "coding")
+    normalized = normalize_task_type(task_type or "coding")
     emit_phase(phase_sink, "working")
 
+    # Every coding task — including a single sequential one — runs in its own
+    # worktree branched from HEAD. This keeps the worker's diff, commits, and
+    # any reverts fully isolated from the main workspace: uncommitted main-agent
+    # state (e.g. todo_list.md ticks) can neither pollute the worker's diff nor
+    # be clobbered by the worker.
     use_worktree = (
-        PARALLEL_AGENTS_ENABLED
-        and normalized == "coding"
+        normalized == "coding"
         and not is_merge_task_prompt(task)
         and worktree_mod.is_git_repo()
-        and task_in_ready_parallel_wave(task, run_log_path)
     )
     worktree_info = None
     if use_worktree:
@@ -1346,13 +1288,30 @@ def dispatch_worker(
             run_log_path=run_log_path,
             turn_id=turn_id,
             approval_callback=approval_callback,
+            task_name=task_name,
         )
+        if not passed:
+            # Preserve partial work on the task branch so it survives worktree
+            # cleanup and can be merged later if the main agent wants it.
+            commit_task("worker-partial", task, worktree_info.path)
         worktree_mod.record_branch(run_log_path, worktree_info, "ready" if passed else "failed")
-        status = "completed" if passed else "stopped (review did not pass)"
+        blocked = worker_blocked(detail)
+        status = "completed" if passed else ("blocked" if blocked else "stopped (review did not pass)")
         branch_note = f"\n\nWorktree branch: {worktree_info.branch}"
         if passed:
             branch_note += " (ready to merge)"
-        return f"[{description or 'worker'}] Parallel worktree {status}.{branch_note}\n\n{detail[:4000]}{_todo_completion_suffix(task, passed, run_log_path)}"
+        elif blocked:
+            branch_note += (
+                " (the task contract needs clarification; any partial work is "
+                "committed on this branch)"
+            )
+        else:
+            branch_note += (
+                " (partial work is committed on this branch — merge_branch it to "
+                "continue from that state in the main workspace, or leave it and "
+                "dispatch a fresh worker)"
+            )
+        return f"[{description or 'worker'}] Worktree task {status}.{branch_note}\n\n{detail}{_todo_completion_suffix(passed)}"
 
     task_context = context(task)
 
@@ -1367,16 +1326,20 @@ def dispatch_worker(
         run_log_path=run_log_path,
         turn_id=turn_id,
         approval_callback=approval_callback,
+        task_name=task_name,
     )
-    status = "completed" if passed else "stopped (review did not pass)"
-    return f"[{description or 'worker'}] Single-task {status}.\n\n{detail[:4000]}{_todo_completion_suffix(task, passed, run_log_path)}"
+    status = "completed" if passed else ("blocked" if worker_blocked(detail) else "stopped (review did not pass)")
+    return f"[{description or 'worker'}] Single-task {status}.\n\n{detail}{_todo_completion_suffix(passed)}"
 
 
-def _todo_completion_suffix(task, passed, run_log_path):
+def _todo_completion_suffix(passed):
     if not passed:
         return ""
-    note = plan_tools.complete_subtask_after_review(task, run_log_path=run_log_path)
-    return f"\n\n{note}" if note else ""
+    return (
+        "\n\nNext: if this task is a todo in todo_list.md, mark that line `[x]` "
+        "yourself (edit_file), then dispatch the next unblocked todos — or report "
+        "to the user if everything is done."
+    )
 
 
 def build_agent_worker_tool(
@@ -1392,11 +1355,19 @@ def build_agent_worker_tool(
     approval_callback=None,
     question_callback=None,
 ):
-    def agent_worker(prompt, description="", task_type="coding"):
-        canonical, error = resolve_single_worker_task(prompt, run_log_path)
-        if error:
-            return f"Tool error: {error}"
-        task = canonical or ""
+    def agent_worker(
+        task_contract="",
+        description="",
+        task_type="coding",
+        task_name="",
+        supplemental_context="",
+        prompt="",
+    ):
+        # `prompt` remains as a Python-call compatibility alias for older tests
+        # and integrations; the public tool schema requires task_contract.
+        task = (task_contract or prompt or "").strip()
+        if not task:
+            return "Tool error: task_contract must contain one complete todo task block."
         if is_merge_task_prompt(task):
             return (
                 "Tool error: merge tasks are not delegated to agent_worker. "
@@ -1412,10 +1383,11 @@ def build_agent_worker_tool(
             run_log_path=run_log_path,
             turn_id=turn_id,
             target=target,
-            context=lambda project="": build_task_context(messages, target, project),
+            context=lambda project="": (supplemental_context or "").strip(),
             trace_sink=trace_sink,
             phase_sink=phase_sink,
             approval_callback=approval_callback,
+            task_name=(task_name or "").strip(),
         )
 
     return agent_worker

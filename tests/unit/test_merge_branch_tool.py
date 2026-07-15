@@ -72,6 +72,24 @@ def test_merge_branch_rejects_unknown_branch(repo, tmp_path):
     assert worktree_mod.ready_branches(run_log) == ["lb/run/t1-auth"]
 
 
+def test_merge_branch_accepts_failed_branch_with_partial_work(repo, tmp_path):
+    """A failed worker branch carries committed partial work; the main agent
+    may merge it to continue from that state."""
+    run_log = tmp_path / "run.json"
+    branch = "lb/run/t1-auth"
+    _make_branch(repo, branch, "auth.txt", "half done\n")
+    worktree_mod.record_branch(
+        run_log,
+        worktree_mod.WorktreeInfo(branch, tmp_path / "missing-wt", "Add auth"),
+        "failed",
+    )
+
+    reply = merge_branch(branch, run_log_path=run_log)
+
+    assert f"Merged {branch!r}" in reply
+    assert (repo / "auth.txt").read_text() == "half done\n"
+
+
 def test_merge_branch_conflict_leaves_merge_in_progress(repo, tmp_path):
     run_log = tmp_path / "run.json"
     branch = "lb/run/t1-auth"

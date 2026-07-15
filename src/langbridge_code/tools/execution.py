@@ -1,7 +1,6 @@
 import json
 import re
 import shutil
-import subprocess
 from pathlib import Path
 
 from langbridge_code.settings import (
@@ -9,7 +8,10 @@ from langbridge_code.settings import (
     MAX_EXECUTION_OUTPUT_CHARS,
     MAX_EXECUTION_TIMEOUT_SECONDS,
 )
+from langbridge_code.tools.common.env import workspace_env
+from langbridge_code.tools.common.proc import run_command
 from langbridge_code.tools.common.purpose import PURPOSE_PARAMETER
+from langbridge_code.tools.common.runtime import managed_binary
 from langbridge_code.agents.common.workspace import get_workspace_root
 
 WORKSPACE_ROOT = Path.cwd().resolve()
@@ -125,24 +127,12 @@ def bash(command, cwd=".", timeout_seconds=DEFAULT_EXECUTION_TIMEOUT_SECONDS):
 
     timeout = max(1, min(int(timeout_seconds), MAX_EXECUTION_TIMEOUT_SECONDS))
 
-    try:
-        completed = subprocess.run(
-            ["bash", "-c", command],
-            cwd=target_cwd,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            timeout=timeout,
-            check=False,
-        )
-        output = completed.stdout
-        timed_out = False
-        exit_code = completed.returncode
-    except subprocess.TimeoutExpired as error:
-        output = error.stdout or ""
-        timed_out = True
-        exit_code = None
-
+    output, exit_code, timed_out = run_command(
+        [managed_binary("bash"), "-c", command],
+        cwd=target_cwd,
+        env=workspace_env(),
+        timeout=timeout,
+    )
     output, truncated = truncate_output(output)
     return json.dumps(
         {
@@ -181,24 +171,12 @@ def powershell(command, cwd=".", timeout_seconds=DEFAULT_EXECUTION_TIMEOUT_SECON
     timeout = max(1, min(int(timeout_seconds), MAX_EXECUTION_TIMEOUT_SECONDS))
     binary = _powershell_binary()
 
-    try:
-        completed = subprocess.run(
-            [binary, "-NoProfile", "-Command", command],
-            cwd=target_cwd,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            timeout=timeout,
-            check=False,
-        )
-        output = completed.stdout
-        timed_out = False
-        exit_code = completed.returncode
-    except subprocess.TimeoutExpired as error:
-        output = error.stdout or ""
-        timed_out = True
-        exit_code = None
-
+    output, exit_code, timed_out = run_command(
+        [binary, "-NoProfile", "-Command", command],
+        cwd=target_cwd,
+        env=workspace_env(),
+        timeout=timeout,
+    )
     output, truncated = truncate_output(output)
     return json.dumps(
         {

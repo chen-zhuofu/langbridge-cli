@@ -35,17 +35,52 @@ def test_load_api_key_prefers_env_for_matching_provider(monkeypatch, tmp_path):
     assert settings.load_api_key("openai") == "sk-env-openai"
 
 
-def test_legacy_api_key_falls_back_to_active_provider(monkeypatch, tmp_path):
+def test_load_api_key_uses_deepseek_env(monkeypatch, tmp_path):
     user_cfg = tmp_path / "config.json"
-    user_cfg.write_text(json.dumps({"api_key": "sk-legacy"}), encoding="utf-8")
+    user_cfg.write_text("{}", encoding="utf-8")
     monkeypatch.setattr(settings, "USER_CONFIG_PATH", user_cfg)
-    monkeypatch.setenv("LANGBRIDGE_API_PROVIDER", "moonshot")
-    monkeypatch.delenv("MOONSHOT_API_KEY", raising=False)
-    monkeypatch.delenv("KIMI_API_KEY", raising=False)
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-env-deepseek")
 
-    assert settings.load_api_key("moonshot") == "sk-legacy"
+    assert settings.load_api_key("deepseek") == "sk-env-deepseek"
 
 
-def test_artifacts_dir_defaults_under_package():
-    assert settings.ARTIFACTS_DIR == settings.PACKAGE_DIR / "artifacts"
-    assert settings.RUNS_DIR == settings.PACKAGE_DIR / "artifacts"
+def test_provider_binding_resolves_deepseek_defaults(monkeypatch, tmp_path):
+    monkeypatch.setattr(settings, "USER_CONFIG_PATH", tmp_path / "missing.json")
+    monkeypatch.setenv("LANGBRIDGE_API_PROVIDER", "deepseek")
+    monkeypatch.delenv("LANGBRIDGE_MODEL", raising=False)
+    monkeypatch.delenv("LANGBRIDGE_API_BASE_URL", raising=False)
+    try:
+        settings._bind(settings.load_config())
+        assert settings.API_PROVIDER == "deepseek"
+        assert settings.DEFAULT_MODEL == "deepseek-v4-pro"
+        assert settings.API_BASE_URL == "https://api.deepseek.com"
+        # Per-agent overrides: explorer runs on the cheaper flash model.
+        assert settings.model_for_agent("explorer") == "deepseek-v4-flash"
+        assert settings.model_for_agent("worker") == "deepseek-v4-pro"
+        assert settings.model_for_agent("worker", "custom-model") == "custom-model"
+    finally:
+        monkeypatch.undo()
+        settings._bind(settings.load_config())
+
+
+def test_choose_api_provider_uses_saved_choice(monkeypatch, tmp_path):
+    user_cfg = tmp_path / "config.json"
+    user_cfg.write_text(json.dumps({"api": {"provider": "deepseek"}}), encoding="utf-8")
+    monkeypatch.setattr(settings, "USER_CONFIG_PATH", user_cfg)
+    monkeypatch.delenv("LANGBRIDGE_API_PROVIDER", raising=False)
+
+    assert settings.choose_api_provider() == "deepseek"
+
+
+def test_choose_api_provider_non_interactive_falls_back(monkeypatch, tmp_path):
+    user_cfg = tmp_path / "missing.json"
+    monkeypatch.setattr(settings, "USER_CONFIG_PATH", user_cfg)
+    monkeypatch.delenv("LANGBRIDGE_API_PROVIDER", raising=False)
+    monkeypatch.setattr(settings.sys.stdin, "isatty", lambda: False)
+
+    assert settings.choose_api_provider() == settings.active_api_provider()
+
+
+def test_artifacts_dir_defaults_under_install_root_per_project():
+    expected = settings.INSTALL_ROOT / "artifacts" / settings.WORKSPACE_ROOT.name
+    assert settings.ARTIFACTS_DIR == expected

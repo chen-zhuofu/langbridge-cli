@@ -36,7 +36,7 @@ def test_partial_work_note_lists_dirty_and_untracked(repo):
     assert "not reverted" in note
     assert "app.py" in note
     assert "new_module.py" in note
-    assert "re-dispatch" in note and "split" in note
+    assert "re-dispatch" in note and "revise todo_list.md" in note
 
 
 def test_partial_work_note_empty_when_tree_clean(repo):

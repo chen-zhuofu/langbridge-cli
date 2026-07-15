@@ -77,8 +77,7 @@ def decode_stream(value):
 
 def run_agent(repo_dir, problem_statement, artifacts_dir, model, timeout):
     env = os.environ.copy()
-    env["LANGBRIDGE_RUNS_DIR"] = str(artifacts_dir / "session-history")
-    env["LANGBRIDGE_TODO_LIST_PATH"] = str(artifacts_dir / "todo_list.md")
+    env["LANGBRIDGE_ARTIFACTS_DIR"] = str(artifacts_dir / "session-artifacts")
     env["PYTHONPATH"] = os.pathsep.join([str(SRC_PATH), env.get("PYTHONPATH", "")]).rstrip(os.pathsep)
     if model:
         env["LANGBRIDGE_MODEL"] = model
@@ -108,8 +107,9 @@ def run_agent(repo_dir, problem_statement, artifacts_dir, model, timeout):
 
 
 def extract_patch(repo_dir):
-    run_command(["git", "add", "-A"], cwd=repo_dir)
-    result = run_command(["git", "diff", "--cached"], cwd=repo_dir)
+    # The agent keeps its plan in todo_list.md at the repo root; keep it out of the patch.
+    run_command(["git", "add", "-A", "--", ":!todo_list.md"], cwd=repo_dir)
+    result = run_command(["git", "diff", "--cached", "--", ":!todo_list.md"], cwd=repo_dir)
     return result.stdout
 
 

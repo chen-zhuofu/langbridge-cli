@@ -4,6 +4,7 @@ import subprocess
 
 from langbridge_code.agents.common.workspace import get_workspace_root
 from langbridge_code.tools.common.purpose import PURPOSE_PARAMETER
+from langbridge_code.tools.common.runtime import managed_binary
 from langbridge_code.tools.execution import resolve_workspace_path, truncate_output
 
 DEFAULT_GIT_TIMEOUT_SECONDS = 120
@@ -86,7 +87,7 @@ def tool(name):
 def _run_git(args, *, cwd=None, timeout=DEFAULT_GIT_TIMEOUT_SECONDS):
     root = get_workspace_root()
     completed = subprocess.run(
-        ["git", *args],
+        [managed_binary("git"), *args],
         cwd=cwd or root,
         capture_output=True,
         text=True,

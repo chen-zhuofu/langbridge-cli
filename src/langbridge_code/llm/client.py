@@ -1,4 +1,4 @@
-"""LLM client — OpenAI Responses API or Moonshot/Kimi chat completions."""
+"""LLM client — OpenAI Responses API, or chat completions for Moonshot/Kimi and DeepSeek."""
 import json
 import time
 import uuid
@@ -25,7 +25,7 @@ def rate_limit_is_non_retryable(error: RateLimitError) -> bool:
 def quota_exceeded_message(error: RateLimitError) -> str:
     return (
         "API daily token quota is exhausted (provider TPD limit). "
-        "Wait for the daily reset, or switch provider/model/API key in ~/.langbridge/config.json."
+        "Wait for the daily reset, or switch provider/model/API key in ~/.langbridge-code/config.json."
     )
 
 
@@ -41,14 +41,9 @@ def format_api_error(error: BaseException) -> str:
         return f"Request failed: {text[:400]}…"
     return f"Request failed: {text}"
 from langbridge_code.llm.parse import extract_output_text
-from langbridge_code.settings import (
-    API_BASE_URL,
-    API_MAX_RETRIES,
-    API_PROVIDER,
-    API_STREAMING_ENABLED,
-    API_TIMEOUT_SECONDS,
-    load_config,
-)
+# Settings are read via the module (not `from ... import NAME`) because the
+# first-run provider selection rebinds them after this module is imported.
+from langbridge_code import settings
 
 _STREAM_EMIT_INTERVAL_SECONDS = 0.08
 
@@ -56,16 +51,16 @@ _STREAM_EMIT_INTERVAL_SECONDS = 0.08
 def make_client(api_key):
     kwargs = {
         "api_key": api_key,
-        "timeout": API_TIMEOUT_SECONDS,
-        "max_retries": API_MAX_RETRIES,
+        "timeout": settings.API_TIMEOUT_SECONDS,
+        "max_retries": settings.API_MAX_RETRIES,
     }
-    if API_BASE_URL:
-        kwargs["base_url"] = API_BASE_URL
+    if settings.API_BASE_URL:
+        kwargs["base_url"] = settings.API_BASE_URL
     return OpenAI(**kwargs)
 
 
 def uses_responses_api(provider=None):
-    return (provider or API_PROVIDER) == "openai"
+    return (provider or settings.API_PROVIDER) == "openai"
 
 
 def to_chat_tools(tool_schemas):
@@ -291,7 +286,19 @@ def _stream_chat_completion(client, kwargs, *, label, stream_sink):
 
 
 DEFAULT_OPENAI_REASONING = {"summary": "auto"}
+# Moonshot/Kimi: keep=all is required so prior reasoning survives multi-step tools.
 DEFAULT_MOONSHOT_THINKING = {"type": "enabled", "keep": "all"}
+# DeepSeek V4: same thinking switch, but "keep" is not part of its API.
+DEFAULT_DEEPSEEK_THINKING = {"type": "enabled"}
+
+
+def _chat_extra_body():
+    provider = settings.API_PROVIDER
+    if provider == "moonshot":
+        return {"thinking": DEFAULT_MOONSHOT_THINKING}
+    if provider == "deepseek":
+        return {"thinking": DEFAULT_DEEPSEEK_THINKING}
+    return None
 
 
 def create_model_response(
@@ -324,13 +331,13 @@ def create_model_response(
                 kwargs = {
                     "model": model,
                     "messages": to_chat_messages(agent_input),
-                    # Moonshot/Kimi: enable thinking + preserve prior reasoning.
-                    # kimi-k2.7-code always thinks; keep=all is required for multi-step tools.
-                    "extra_body": {"thinking": DEFAULT_MOONSHOT_THINKING},
                 }
+                extra_body = _chat_extra_body()
+                if extra_body:
+                    kwargs["extra_body"] = extra_body
                 if tool_schemas:
                     kwargs["tools"] = to_chat_tools(tool_schemas)
-                if API_STREAMING_ENABLED and stream_sink is not None:
+                if settings.API_STREAMING_ENABLED and stream_sink is not None:
                     data = _stream_chat_completion(
                         client,
                         kwargs,

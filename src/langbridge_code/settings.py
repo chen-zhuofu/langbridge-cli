@@ -1,43 +1,22 @@
 """Load LangBridge settings from config.json.
 
 Defaults ship with the package (langbridge_code/config.json).
-Per-user overrides live at ~/.langbridge-code/config.json (falls back to ~/.langbridge).
+Per-user overrides live at ~/.langbridge-code/config.json.
 Environment variables still override secrets, model, and runtime paths.
 """
 import getpass
 import json
 import os
+import sys
 from pathlib import Path
 
 PACKAGE_DIR = Path(__file__).resolve().parent
 DEFAULT_CONFIG_PATH = PACKAGE_DIR / "config.json"
+# langbridge-code checkout root (src/langbridge_code -> langbridge-code).
+INSTALL_ROOT = PACKAGE_DIR.parents[1]
 
-
-def _default_config_dir() -> Path:
-    new_dir = Path.home() / ".langbridge-code"
-    legacy_dir = Path.home() / ".langbridge"
-    if new_dir.exists() or not legacy_dir.exists():
-        return new_dir
-    return legacy_dir
-
-
-CONFIG_DIR = _default_config_dir()
+CONFIG_DIR = Path.home() / ".langbridge-code"
 USER_CONFIG_PATH = CONFIG_DIR / "config.json"
-# Back-compat alias used by main.py / TUI.
-CONFIG_PATH = USER_CONFIG_PATH
-HISTORY_PATH = CONFIG_DIR / "history"
-
-WRITE_TOOLS = {
-    "write",
-    "edit_file",
-    "multi_edit",
-    "apply_patch",
-    "delete_file",
-    "bash",
-    "powershell",
-    "git_commit",
-}
-
 
 def _deep_merge(base, override):
     merged = dict(base)
@@ -98,10 +77,17 @@ def _bind(cfg):
     paths = cfg.get("paths", {})
     api = cfg.get("api", {})
 
+    provider = os.environ.get("LANGBRIDGE_API_PROVIDER", api.get("provider", "openai"))
+    provider_cfg = (api.get("providers") or {}).get(provider, {})
+
     globals().update({
-        "DEFAULT_MODEL": os.environ.get("LANGBRIDGE_MODEL", cfg["model"]),
-        "API_PROVIDER": os.environ.get("LANGBRIDGE_API_PROVIDER", api.get("provider", "openai")),
-        "API_BASE_URL": os.environ.get("LANGBRIDGE_API_BASE_URL", api.get("base_url", "")),
+        "DEFAULT_MODEL": os.environ.get("LANGBRIDGE_MODEL")
+            or cfg.get("model")
+            or provider_cfg.get("model", ""),
+        "API_PROVIDER": provider,
+        "AGENT_MODELS": dict(provider_cfg.get("agent_models") or {}),
+        "API_BASE_URL": os.environ.get("LANGBRIDGE_API_BASE_URL")
+            or provider_cfg.get("base_url", ""),
         "API_TIMEOUT_SECONDS": float(
             os.environ.get("LANGBRIDGE_API_TIMEOUT_SECONDS", api.get("timeout_seconds", 120))
         ),
@@ -115,61 +101,25 @@ def _bind(cfg):
         "DEFAULT_MAX_GUIDANCE": cfg["max_guidance"],
         "MAX_AGENT_STEPS": agent["max_agent_steps"],
         "MAX_AGENT_SECONDS": agent.get("max_agent_seconds", 3600),
-        "MAX_EXPLORER_STEPS": agent.get(
-            "max_explorer_steps",
-            agent.get("max_specialist_agent_steps", 30),
-        ),
-        "MAX_EXPLORER_SECONDS": agent.get(
-            "max_explorer_seconds",
-            agent.get("max_specialist_seconds", 900),
-        ),
-        "MAX_WORKER_STEPS": agent.get(
-            "max_worker_steps",
-            agent.get("max_specialist_agent_steps", 30),
-        ),
-        "MAX_WORKER_SECONDS": agent.get(
-            "max_worker_seconds",
-            agent.get("max_specialist_seconds", 900),
-        ),
-        "MAX_REVIEWER_STEPS": agent.get(
-            "max_reviewer_steps",
-            agent.get("max_specialist_agent_steps", 30),
-        ),
-        "MAX_REVIEWER_SECONDS": agent.get(
-            "max_reviewer_seconds",
-            agent.get("max_specialist_seconds", 900),
-        ),
+        "MAX_EXPLORER_STEPS": agent.get("max_explorer_steps", 30),
+        "MAX_EXPLORER_SECONDS": agent.get("max_explorer_seconds", 900),
+        "MAX_WORKER_STEPS": agent.get("max_worker_steps", 30),
+        "MAX_WORKER_SECONDS": agent.get("max_worker_seconds", 900),
+        "MAX_REVIEWER_STEPS": agent.get("max_reviewer_steps", 30),
+        "MAX_REVIEWER_SECONDS": agent.get("max_reviewer_seconds", 900),
         "MAX_WORKFLOW_SECONDS": agent.get("max_workflow_seconds", 3600),
         "MAX_PLANNER_STEPS": agent.get("max_planner_steps", 30),
         "MAX_PLANNER_SECONDS": agent.get("max_planner_seconds", 600),
-        "MAX_CODER_REVIEWER_ROUNDS": agent.get(
-            "max_worker_reviewer_steps",
-            agent.get("max_worker_reviewer_rounds", agent.get("max_coder_reviewer_rounds", agent.get("max_agent_steps", 50))),
-        ),
-        "MAX_WORKER_REVIEWER_STEPS": agent.get(
-            "max_worker_reviewer_steps",
-            agent.get("max_worker_reviewer_rounds", agent.get("max_agent_steps", 50)),
-        ),
-        "MAX_WORKER_REVIEWER_ROUNDS": agent.get(
-            "max_worker_reviewer_steps",
-            agent.get("max_worker_reviewer_rounds", agent.get("max_coder_reviewer_rounds", agent.get("max_agent_steps", 50))),
-        ),
-        "MAX_CODER_REVIEWER_SECONDS": agent.get("max_worker_reviewer_seconds", agent.get("max_coder_reviewer_seconds", 1800)),
-        "MAX_WORKER_REVIEWER_SECONDS": agent.get("max_worker_reviewer_seconds", agent.get("max_coder_reviewer_seconds", 1800)),
+        "MAX_WORKER_REVIEWER_STEPS": agent.get("max_worker_reviewer_steps", agent.get("max_agent_steps", 50)),
+        "MAX_WORKER_REVIEWER_SECONDS": agent.get("max_worker_reviewer_seconds", 1800),
         "WORKFLOW_OUTER_MULTIPLIER": agent.get("workflow_outer_multiplier", 2),
         "MAX_PARALLEL_TOOL_CALLS": int(
             os.environ.get("LANGBRIDGE_MAX_PARALLEL_TOOL_CALLS", agent.get("max_parallel_tool_calls", 4))
         ),
-        "MAX_PARALLEL_CODERS": int(
-            os.environ.get(
-                "LANGBRIDGE_MAX_PARALLEL_CODERS",
-                agent.get("max_parallel_workers", agent.get("max_parallel_coders", 2)),
-            )
-        ),
         "MAX_PARALLEL_WORKERS": int(
             os.environ.get(
                 "LANGBRIDGE_MAX_PARALLEL_WORKERS",
-                agent.get("max_parallel_workers", agent.get("max_parallel_coders", 2)),
+                agent.get("max_parallel_workers", 2),
             )
         ),
         "PARALLEL_AGENTS_ENABLED": _env_bool(
@@ -204,15 +154,11 @@ def _bind(cfg):
         # (11 > 10) so the compressed middle always overlaps progress.md.
         "COMPACT_RAW_KEEP": int(context.get("compact_raw_keep", 11)),
         "COMPACT_FRACTION": float(context.get("compact_fraction", 0.4)),
-        "PROGRESS_MAX_FRACTION": float(context.get("progress_max_fraction", 0.4)),
+        "PROGRESS_MAX_FRACTION": float(context.get("progress_max_fraction", 0.1)),
         "TRACES_RESUME_MAX_FRACTION": float(context.get("traces_resume_max_fraction", 0.3)),
         "COMPACT_USE_LLM": context.get("compact_use_llm", True),
         "COMPACT_PROSE_TARGET_CHARS": int(context.get("compact_prose_target_chars", 16000)),
         "PROGRESS_NOTE_REMINDER_ROUNDS": int(context.get("progress_note_reminder_rounds", 10)),
-        "CONTEXT_DEBUG_PERSIST": _env_bool(
-            "LANGBRIDGE_CONTEXT_DEBUG_PERSIST",
-            context.get("context_debug_persist", True),
-        ),
         "MAX_FILE_BYTES": fs["max_file_bytes"],
         "MAX_SEARCH_FILE_BYTES": fs["max_search_file_bytes"],
         "MAX_EXECUTION_OUTPUT_CHARS": execution["max_output_chars"],
@@ -242,7 +188,6 @@ def _bind(cfg):
         paths.get("agent_state_dir"),
         workspace_root / "agent-state",
     )
-    workflow_state_dir = agent_state_dir / "workflow"
     globals().update({
         "WORKSPACE_ROOT": workspace_root,
         "AGENT_STATE_DIR": agent_state_dir,
@@ -256,27 +201,13 @@ def _bind(cfg):
             paths.get("user_memory_path"),
             CONFIG_DIR / "memory.md",
         ),
+        # Sessions live under the langbridge-code checkout, grouped by project
+        # (the directory the CLI was launched from): artifacts/{project}/{session}.
         "ARTIFACTS_DIR": _path_override(
             "LANGBRIDGE_ARTIFACTS_DIR",
             paths.get("artifacts_dir"),
-            PACKAGE_DIR / "artifacts",
+            INSTALL_ROOT / "artifacts" / workspace_root.name,
         ),
-        "RUNS_DIR": _path_override(
-            "LANGBRIDGE_RUNS_DIR",
-            paths.get("runs_dir") or paths.get("artifacts_dir"),
-            PACKAGE_DIR / "artifacts",
-        ),
-        "TODO_LIST_PATH": _path_override(
-            "LANGBRIDGE_TODO_LIST_PATH",
-            paths.get("todo_list_path"),
-            workflow_state_dir / "todo_list.md",
-        ),
-        "WORKFLOW_WORKLOG_DIR": workflow_state_dir / "worklog",
-        "CODER_WORKLOG_DIR": agent_state_dir / "worker" / "worklog",
-        "WORKER_WORKLOG_DIR": agent_state_dir / "worker" / "worklog",
-        "REVIEWER_WORKLOG_DIR": agent_state_dir / "reviewer" / "worklog",
-        "PLANNER_WORKLOG_DIR": agent_state_dir / "planner" / "worklog",
-        "OPTIMIZER_TRACE_DIR": workflow_state_dir / "optimizer-traces",
     })
 
 
@@ -286,6 +217,13 @@ _bind(load_config())
 _PROVIDER_ENV = {
     "moonshot": ("MOONSHOT_API_KEY", "KIMI_API_KEY"),
     "openai": ("OPENAI_API_KEY",),
+    "deepseek": ("DEEPSEEK_API_KEY",),
+}
+
+PROVIDER_LABELS = {
+    "moonshot": "Moonshot/Kimi",
+    "openai": "OpenAI",
+    "deepseek": "DeepSeek",
 }
 
 
@@ -294,17 +232,61 @@ def active_api_provider():
     return os.environ.get("LANGBRIDGE_API_PROVIDER", cfg.get("api", {}).get("provider", "openai"))
 
 
+def _explicit_provider():
+    """Provider explicitly chosen via env or the user's own config, else None."""
+    env = os.environ.get("LANGBRIDGE_API_PROVIDER")
+    if env:
+        return env
+    if USER_CONFIG_PATH.exists():
+        user_cfg = json.loads(USER_CONFIG_PATH.read_text(encoding="utf-8"))
+        return (user_cfg.get("api") or {}).get("provider")
+    return None
+
+
+def choose_api_provider():
+    """Return the active provider, asking interactively on first run.
+
+    The choice is saved to the user config, so this only prompts once.
+    Non-interactive runs (no TTY) silently use the packaged default.
+    """
+    explicit = _explicit_provider()
+    if explicit:
+        return explicit
+    if not sys.stdin.isatty():
+        return active_api_provider()
+
+    options = tuple(PROVIDER_LABELS)
+    default = active_api_provider()
+    default_index = options.index(default) + 1 if default in options else 1
+    print("Select API provider:")
+    for number, name in enumerate(options, 1):
+        print(f"  {number}) {PROVIDER_LABELS[name]} ({name})")
+    raw = input(f"Choice [1-{len(options)}, default {default_index}]: ").strip()
+    try:
+        provider = options[int(raw) - 1] if raw else options[default_index - 1]
+    except (ValueError, IndexError):
+        provider = options[default_index - 1]
+
+    save_user_config({"api": {"provider": provider}})
+    _bind(load_config())  # re-resolve DEFAULT_MODEL / API_BASE_URL for the choice
+    return provider
+
+
+def model_for_agent(role, default=None):
+    """Model for one agent role (explorer/planner/worker/reviewer).
+
+    Resolution: LANGBRIDGE_MODEL env (global override) > per-role entry in the
+    provider's agent_models config > the session default model.
+    """
+    env = os.environ.get("LANGBRIDGE_MODEL")
+    if env:
+        return env
+    return AGENT_MODELS.get(role) or default or DEFAULT_MODEL
+
+
 def _api_keys_from_config(cfg=None):
     cfg = cfg or load_config()
-    keys = {k: v for k, v in (cfg.get("api_keys") or {}).items() if v}
-    legacy = cfg.get("api_key")
-    if legacy:
-        provider = os.environ.get(
-            "LANGBRIDGE_API_PROVIDER",
-            cfg.get("api", {}).get("provider", "openai"),
-        )
-        keys.setdefault(provider, legacy)
-    return keys
+    return {k: v for k, v in (cfg.get("api_keys") or {}).items() if v}
 
 
 def save_api_key(api_key, provider=None):
@@ -313,7 +295,7 @@ def save_api_key(api_key, provider=None):
 
 
 def load_api_key(provider=None):
-    provider = provider or active_api_provider()
+    provider = provider or choose_api_provider()
 
     for env_name in _PROVIDER_ENV.get(provider, ()):
         api_key = os.environ.get(env_name)
@@ -324,7 +306,7 @@ def load_api_key(provider=None):
     if api_key:
         return api_key
 
-    label = "Moonshot/Kimi" if provider == "moonshot" else "OpenAI"
+    label = PROVIDER_LABELS.get(provider, provider)
     api_key = getpass.getpass(f"Enter {label} API key: ")
     save_api_key(api_key, provider)
     return api_key

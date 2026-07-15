@@ -1,0 +1,114 @@
+"""Per-task progress notes for subagents (worker/explorer)."""
+from langbridge_code.agents.common.task_progress import TaskProgress
+from langbridge_code.context.common.stack import ContextStack
+from langbridge_code.util.artifacts import task_progress_path
+from langbridge_code.util.progress import (
+    append_progress_note,
+    last_progress_turn_id,
+    read_progress,
+)
+
+
+def test_task_progress_path_is_stable_per_task_name(tmp_path):
+    first = task_progress_path(tmp_path, "task 3: game state")
+    again = task_progress_path(tmp_path, "task 3: game state")
+    other = task_progress_path(tmp_path, "task 4: UI wiring")
+    assert first == again
+    assert first != other
+    assert first.name.startswith("progress-")
+    assert first.parent == tmp_path
+
+
+def test_task_progress_path_requires_task_name(tmp_path):
+    assert task_progress_path(tmp_path, "") is None
+    assert task_progress_path(None, "task") is None
+
+
+def test_append_note_goes_to_task_file_not_session_progress(tmp_path):
+    append_progress_note(tmp_path, 1, "did the thing", "task-3")
+    task_file = task_progress_path(tmp_path, "task-3")
+    assert task_file.is_file()
+    assert "did the thing" in task_file.read_text(encoding="utf-8")
+    assert not (tmp_path / "progress.md").exists()
+
+
+def test_redispatch_opens_next_turn_section(tmp_path):
+    append_progress_note(tmp_path, 1, "first dispatch work", "task-3")
+    assert last_progress_turn_id(tmp_path, "task-3") == 1
+    append_progress_note(tmp_path, 2, "second dispatch work", "task-3")
+    text = read_progress(tmp_path, "task-3")
+    assert "## Turn 1" in text
+    assert "## Turn 2" in text
+
+
+def _stack():
+    return ContextStack(system_content="sys", label="Worker")
+
+
+def test_attach_pins_existing_notes_as_progress_block(tmp_path):
+    append_progress_note(tmp_path, 1, "wrote WumpusGame.move", "task-3")
+    progress = TaskProgress("key", "model", tmp_path, "task-3", label="Worker")
+    stack = _stack()
+    progress.attach(stack, [])
+    assert "wrote WumpusGame.move" in (stack.progress_block or "")
+    assert progress.turn_id == 2
+
+
+def test_attach_without_task_name_is_disabled(tmp_path):
+    progress = TaskProgress("key", "model", tmp_path, "", label="Worker")
+    assert not progress.enabled
+    stack = _stack()
+    progress.attach(stack, [])
+    assert stack.progress_block is None
+
+
+def test_write_note_appends_via_fork_and_updates_file(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "langbridge_code.agents.common.fork.fork_one_pass",
+        lambda *args, **kwargs: "#### Work done\n- implemented move()",
+    )
+    monkeypatch.setattr(
+        "langbridge_code.util.progress.maybe_compact_progress",
+        lambda *args, **kwargs: False,
+    )
+    progress = TaskProgress("key", "model", tmp_path, "task-3", label="Worker")
+    stack = _stack()
+    progress.attach(stack, [{"role": "system", "content": "sys"}])
+    result = progress.write_note()
+    assert "implemented move()" in read_progress(tmp_path, "task-3")
+    assert "Noted" in result
+
+
+def test_maybe_remind_injects_hook_after_silent_rounds(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "langbridge_code.agents.common.task_progress.PROGRESS_NOTE_REMINDER_ROUNDS", 2
+    )
+
+    class FakeContext:
+        def __init__(self):
+            self.turns = []
+
+        def begin_turn(self, text):
+            self.turns.append(text)
+
+    progress = TaskProgress("key", "model", tmp_path, "task-3", label="Worker")
+    stack = _stack()
+    progress.attach(stack, [])
+    context = FakeContext()
+    progress.maybe_remind(context)
+    progress.maybe_remind(context)
+    assert context.turns == []
+    progress.maybe_remind(context)
+    assert len(context.turns) == 1
+    assert "note_progress" in context.turns[0]
+
+
+def test_refresh_block_after_compaction_rereads_file(tmp_path):
+    progress = TaskProgress("key", "model", tmp_path, "task-3", label="Worker")
+    stack = _stack()
+    progress.attach(stack, [])
+    assert stack.progress_block is None
+    append_progress_note(tmp_path, progress.turn_id, "new fact", "task-3")
+    assert stack.on_compacted is not None
+    stack.on_compacted(stack)
+    assert "new fact" in (stack.progress_block or "")

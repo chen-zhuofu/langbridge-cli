@@ -6,17 +6,20 @@ from pathlib import Path
 
 from langbridge_code.agents.common import control
 from langbridge_code.agents.common.limits import now, over_time_budget
+from langbridge_code.agents.common.task_progress import TaskProgress
 from langbridge_code.agents.system_prompt.explorer import explorer_system_prompt
+from langbridge_code.tools.note_progress import TASK_NOTE_PROGRESS_TOOL_SCHEMA
 from langbridge_code.llm.client import create_model_response
 from langbridge_code.llm.parse import extract_output_text, print_step_trace
 from langbridge_code.tools.common.purpose import PURPOSE_PARAMETER, without_purpose
+from langbridge_code.tools.common.runtime import managed_binary
 from langbridge_code.util.agent_worklog import (
     write_worklog_finish,
     write_worklog_observation,
     write_worklog_received,
     write_worklog_step,
 )
-from langbridge_code.context.common.budget import prepare_agent_messages
+from langbridge_code.context.common.budget import messages_with_budget_notice, prepare_agent_messages
 from langbridge_code.context.agent_context import finish_step, init_agent_context
 from langbridge_code.context.foreground import ForegroundTracker
 from langbridge_code.settings import (
@@ -96,7 +99,7 @@ THOROUGHNESS_HINTS = {
 def _run_git(args, *, cwd):
     try:
         result = subprocess.run(
-            ["git", *args],
+            [managed_binary("git"), *args],
             cwd=cwd,
             capture_output=True,
             text=True,
@@ -175,13 +178,22 @@ AGENT_EXPLORER_TOOL_SCHEMA = {
                 "type": "string",
                 "description": "Short 3-5 word title for logging.",
             },
+            "task_name": {
+                "type": "string",
+                "description": (
+                    "Stable name for this investigation (e.g. 'explore-auth-flow'). "
+                    "Names the task's progress note file: findings noted there are "
+                    "shown to the next explorer dispatched with the SAME task_name — "
+                    "reuse the exact name when continuing an investigation."
+                ),
+            },
             "thoroughness": {
                 "type": "string",
                 "enum": ["quick", "medium", "thorough"],
                 "description": "Search depth (default medium).",
             },
         },
-        "required": ["purpose", "prompt", "description"],
+        "required": ["purpose", "prompt", "description", "task_name"],
         "additionalProperties": False,
     },
 }
@@ -201,6 +213,7 @@ def run_explore(
     trace_sink=None,
     run_log_path=None,
     turn_id=None,
+    task_name="",
 ) -> str:
     session = ExploreSession(
         api_key,
@@ -210,6 +223,7 @@ def run_explore(
         trace_sink=trace_sink,
         run_log_path=run_log_path,
         turn_id=turn_id,
+        task_name=task_name,
     )
     return session.send(build_explore_prompt(prompt, thoroughness=thoroughness))
 
@@ -225,11 +239,10 @@ class ExploreSession:
         trace_sink=None,
         run_log_path=None,
         turn_id=None,
+        task_name="",
     ):
         self.api_key = api_key
         self.model = model
-        self.tool_schemas = tool_schemas
-        self.tools = tools
         self.label = "Explore"
         self.trace_sink = trace_sink
         self.run_log_path = run_log_path
@@ -240,9 +253,32 @@ class ExploreSession:
             run_log_path=run_log_path,
             label=self.label,
         )
+        self.task_progress = TaskProgress(
+            api_key, model, run_log_path, task_name, label=self.label
+        )
+        self.tools = dict(tools)
+        self.tool_schemas = list(tool_schemas)
+        if self.task_progress.enabled:
+            self.tools["note_progress"] = self.task_progress.write_note
+            self.tool_schemas.append(TASK_NOTE_PROGRESS_TOOL_SCHEMA)
+            self.task_progress.attach(self.context.stack, self.messages)
         self.step = 0
 
     def send(self, user_prompt):
+        from langbridge_code.skills import (
+            EXPLORER_SKILL_NAMES,
+            ensure_skill_index_block,
+            skill_catalog_text_for,
+        )
+
+        ensure_skill_index_block(
+            self.context.stack,
+            self.api_key,
+            self.model,
+            user_prompt,
+            skill_catalog_text_for(EXPLORER_SKILL_NAMES),
+            label=f"{self.label} skill prefetch",
+        )
         self.context.begin_turn(user_prompt)
         write_worklog_received(self.run_log_path, self.label, self.worklog_id, self.turn_id, user_prompt)
         foreground = ForegroundTracker(self.label, self.messages, self.model)
@@ -264,7 +300,7 @@ class ExploreSession:
                     lambda: create_model_response(
                         self.api_key,
                         self.model,
-                        self.messages,
+                        messages_with_budget_notice(self.messages, self.model),
                         tool_schemas=self.tool_schemas,
                         reasoning={"summary": "auto"},
                         label=self.label,
@@ -290,6 +326,7 @@ class ExploreSession:
                     )
                 self.step += 1
                 finish_step(self.context, step_items, self, budget)
+                self.task_progress.maybe_remind(self.context)
                 foreground.publish()
             return self._finish(f"{self.label} stopped: max steps.")
         finally:
@@ -323,6 +360,7 @@ def dispatch_explore(
     run_log_path=None,
     turn_id=None,
     phase_sink=None,
+    task_name="",
 ):
     task = (prompt or "").strip()
     if not task:
@@ -336,6 +374,7 @@ def dispatch_explore(
         trace_sink=trace_sink,
         run_log_path=run_log_path,
         turn_id=turn_id,
+        task_name=task_name,
     )
     return format_explore_output(description, report)
 
@@ -349,7 +388,7 @@ def build_agent_explorer_tool(
     trace_sink=None,
     phase_sink=None,
 ):
-    def agent_explorer(prompt, description="", thoroughness="medium"):
+    def agent_explorer(prompt, description="", thoroughness="medium", task_name=""):
         return dispatch_explore(
             api_key,
             model,
@@ -360,6 +399,7 @@ def build_agent_explorer_tool(
             run_log_path=run_log_path,
             turn_id=turn_id,
             phase_sink=phase_sink,
+            task_name=(task_name or "").strip(),
         )
 
     return agent_explorer

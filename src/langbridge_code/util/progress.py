@@ -1,4 +1,8 @@
-"""Session progress.md — cross-turn memory for the main agent (includes goal state)."""
+"""Session progress.md — cross-turn memory for the main agent (includes goal state).
+
+Subagents (worker/explorer) reuse the exact same note/compaction machinery on
+per-task files: {session}/progress-{task-slug}.md (see task_progress_* below).
+"""
 from __future__ import annotations
 
 import re
@@ -9,6 +13,7 @@ _progress_lock = threading.Lock()
 
 from langbridge_code.settings import MAX_SESSION_SUMMARY_INPUT_CHARS, PROGRESS_MAX_FRACTION
 from langbridge_code.util.artifacts import progress_path as artifact_progress_path
+from langbridge_code.util.artifacts import task_progress_path as artifact_task_progress_path
 
 PROGRESS_HEADER = "# Session progress\n"
 GOAL_HEADER = "## Goal\n"
@@ -25,24 +30,24 @@ class GoalBlock:
     next_step: str = ""
 
 
-def progress_path(run_log_path):
-    path = artifact_progress_path(run_log_path)
-    if path is not None:
-        return path
-    return run_log_path.with_name("progress.md") if run_log_path else None
+def progress_path(run_log_path, task_name: str | None = None):
+    """Session progress.md, or the per-task file when task_name is given."""
+    if task_name:
+        return artifact_task_progress_path(run_log_path, task_name)
+    return artifact_progress_path(run_log_path)
 
 
-def read_progress(run_log_path) -> str:
+def read_progress(run_log_path, task_name: str | None = None) -> str:
     if not run_log_path:
         return ""
-    path = progress_path(run_log_path)
+    path = progress_path(run_log_path, task_name)
     if path is None or not path.exists():
         return ""
     return path.read_text(encoding="utf-8")
 
 
-def write_progress(run_log_path, content: str) -> None:
-    path = progress_path(run_log_path)
+def write_progress(run_log_path, content: str, task_name: str | None = None) -> None:
+    path = progress_path(run_log_path, task_name)
     if path is None:
         return
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -137,37 +142,9 @@ def remove_goal_block(run_log_path) -> None:
         write_progress(run_log_path, body)
 
 
-def _build_continuation_directive(run_log_path, user_prompt: str) -> str:
-    from langbridge_code.agents.common.todo_list import (
-        clean_task_text,
-        first_unfinished_task,
-        is_continuation_request,
-        load_tasks,
-    )
-
-    if not is_continuation_request(user_prompt):
-        return ""
-    tasks = load_tasks(run_log_path)
-    next_task = first_unfinished_task(tasks)
-    if next_task is None:
-        return ""
-    task_line = clean_task_text(next_task.description)
-    return (
-        "Continuation directive (binding for this turn):\n"
-        "The user wants to resume the existing todo_list — not start a new project.\n"
-        "- Call read_plan, then delegate agent_worker with exactly the next unchecked "
-        "`- [ ]` subtask below.\n"
-        "- Do NOT use ask_user or ask the user to choose between older chat topics "
-        "(e.g. game code vs PPT) unless they explicitly named a new project this turn.\n"
-        "- Do not treat a deliverable file already existing as proof the plan is finished; "
-        "trust only `[x]` marks in the todo_list.\n"
-        f"Next unchecked subtask: {task_line}"
-    )
-
-
-def last_progress_turn_id(run_log_path) -> int:
+def last_progress_turn_id(run_log_path, task_name: str | None = None) -> int:
     """Highest turn id covered in progress.md (0 if none)."""
-    content = read_progress(run_log_path)
+    content = read_progress(run_log_path, task_name)
     ids = []
     for match in _TURN_HEADER_RE.finditer(content):
         start = int(match.group(1))
@@ -188,14 +165,8 @@ def build_turn_user_content(
     MainAgentSession) — not embedded here. ``include_history_briefing`` is
     retained for call-site compatibility but no longer inlines progress.md.
     """
-    del include_history_briefing  # progress is pinned as a <progress> block
-    prompt = (user_prompt or "").strip()
-    continuation = _build_continuation_directive(run_log_path, prompt)
-    if continuation and prompt:
-        return f"{continuation}\n\n---\n\nCurrent request:\n{prompt}"
-    if continuation:
-        return continuation
-    return prompt
+    del run_log_path, include_history_briefing
+    return (user_prompt or "").strip()
 
 
 def build_main_agent_messages(run_log_path, user_prompt: str) -> list[dict]:
@@ -228,7 +199,7 @@ def turn_progress_stub(turn_id: int, *, user: str = "", assistant: str = "") -> 
     return "\n".join(lines)
 
 
-NOTE_PREFIX = "- **Note:**"
+NOTE_HEADING = "### Note"
 
 
 def _turn_section_span(content: str, turn_id: int) -> tuple[int, int] | None:
@@ -244,42 +215,51 @@ def _turn_section_span(content: str, turn_id: int) -> tuple[int, int] | None:
 
 
 def _extract_turn_notes(content: str, turn_id: int) -> list[str]:
+    """Return whole ``### Note`` blocks (multi-line) inside the turn section."""
     span = _turn_section_span(content or "", turn_id)
     if span is None:
         return []
     section = content[span[0] : span[1]]
     return [
-        line.rstrip()
-        for line in section.splitlines()
-        if line.strip().startswith(NOTE_PREFIX)
+        block.strip()
+        for block in re.findall(
+            rf"^{NOTE_HEADING}\s*$.*?(?=^{NOTE_HEADING}\s*$|\Z)",
+            section,
+            re.MULTILINE | re.DOTALL,
+        )
     ]
 
 
-def append_progress_note(run_log_path, turn_id: int, text: str) -> str:
-    """Append a mid-turn note to progress.md under the current turn section.
+def append_progress_note(run_log_path, turn_id: int, text: str, task_name: str | None = None) -> str:
+    """Append a mid-turn structure note under the current turn section.
 
-    The main agent may record progress whenever it finishes something — it
-    does not have to wait for the turn to end. Notes survive the end-of-turn
-    stub/enrich rewrite of the same turn section.
+    The agent may record progress whenever it finishes something — it does
+    not have to wait for the turn to end. Note blocks survive the
+    end-of-turn stub/enrich rewrite of the same turn section. With
+    ``task_name`` the note goes to that task's progress-{slug}.md (subagents);
+    there a "turn" is one dispatch of the task.
     """
-    note = " ".join((text or "").split()).strip()
+    note = (text or "").strip()
     if not note:
         return "Note was empty; nothing recorded."
     if not run_log_path:
         return "No session directory; note not recorded."
-    line = f"{NOTE_PREFIX} {note}"
+    block = note if note.startswith(NOTE_HEADING) else f"{NOTE_HEADING}\n{note}"
     heading = f"## Turn {int(turn_id or 0)}"
     with _progress_lock:
-        existing = read_progress(run_log_path).strip()
+        existing = read_progress(run_log_path, task_name).strip()
         span = _turn_section_span(existing, int(turn_id or 0))
         if span is None:
             base = existing if existing else PROGRESS_HEADER.strip()
-            body = base.rstrip() + "\n\n" + heading + "\n\n" + line + "\n"
+            body = base.rstrip() + "\n\n" + heading + "\n\n" + block + "\n"
         else:
             section = existing[span[0] : span[1]].rstrip()
-            body = existing[: span[0]] + section + "\n" + line + "\n" + existing[span[1] :]
-        write_progress(run_log_path, body)
-    return f"Noted in progress.md: {note}"
+            body = existing[: span[0]] + section + "\n\n" + block + "\n" + existing[span[1] :]
+        write_progress(run_log_path, body, task_name)
+    summary = " ".join(note.split())
+    if len(summary) > 200:
+        summary = summary[:197] + "..."
+    return f"Noted in progress.md: {summary}"
 
 
 def _remove_turn_section(content: str, turn_id: int) -> str:
@@ -393,7 +373,7 @@ def _merge_progress_sections_llm(api_key, model, sections: list[_ProgressTurnSec
     return text
 
 
-def maybe_compact_progress(api_key, model, run_log_path) -> bool:
+def maybe_compact_progress(api_key, model, run_log_path, task_name: str | None = None) -> bool:
     """Merge middle progress turns when the file exceeds PROGRESS_MAX_FRACTION of the window."""
     from langbridge_code.context.common.budget import estimate_tokens
     from langbridge_code.llm.model_context import model_context_window
@@ -404,7 +384,7 @@ def maybe_compact_progress(api_key, model, run_log_path) -> bool:
     changed = False
     while True:
         with _progress_lock:
-            content = read_progress(run_log_path).strip()
+            content = read_progress(run_log_path, task_name).strip()
         if estimate_tokens(content) <= budget:
             break
         preamble, _, sections = _split_progress_document(content)
@@ -426,7 +406,7 @@ def maybe_compact_progress(api_key, model, run_log_path) -> bool:
         new_sections = [sections[0], merged_sections[0], sections[-1]]
         body = _render_progress_document(preamble, new_sections)
         with _progress_lock:
-            write_progress(run_log_path, body)
+            write_progress(run_log_path, body, task_name)
         changed = True
         if estimate_tokens(body) <= budget:
             break
@@ -442,16 +422,17 @@ def append_turn_progress_stub(
     *,
     user: str = "",
     assistant: str = "",
+    task_name: str | None = None,
 ) -> None:
     with _progress_lock:
-        existing = read_progress(run_log_path).strip()
+        existing = read_progress(run_log_path, task_name).strip()
         notes = _extract_turn_notes(existing, turn_id)
         existing = _remove_turn_section(existing, turn_id)
         section = turn_progress_stub(turn_id, user=user, assistant=assistant)
         if notes:
-            section = section + "\n" + "\n".join(notes)
+            section = section + "\n\n" + "\n\n".join(notes)
         body = _append_progress_body(run_log_path, existing, section)
-        write_progress(run_log_path, body)
+        write_progress(run_log_path, body, task_name)
 
 
 def schedule_append_turn_progress(
@@ -494,10 +475,15 @@ def finalize_main_agent_turn(
     """Persist progress when a main-agent turn ends (any outcome)."""
     from langbridge_code.util.session_traces import append_progress_boundary
 
+    from langbridge_code.agents.common import control
+
     outcome = (assistant or "").strip() or "(turn ended without a reply)"
     append_turn_progress_stub(run_log_path, turn_id, user=user, assistant=outcome)
     append_progress_boundary(run_log_path, turn_id)
-    maybe_compact_progress(api_key, model, run_log_path)
+    # Skip the synchronous LLM compaction after a user stop — the user wants
+    # the prompt back now, and the next turn's finalize will compact instead.
+    if not control.stop_requested():
+        maybe_compact_progress(api_key, model, run_log_path)
     schedule_append_turn_progress(
         api_key,
         model,
@@ -556,7 +542,7 @@ def append_turn_progress(
             existing = _remove_turn_section(existing, turn_id)
             missing = [note for note in notes if note.strip() not in section]
             if missing:
-                section = section.rstrip() + "\n" + "\n".join(missing)
+                section = section.rstrip() + "\n\n" + "\n\n".join(missing)
         body = _append_progress_body(run_log_path, existing, section)
         write_progress(run_log_path, body)
     maybe_compact_progress(api_key, model, run_log_path)

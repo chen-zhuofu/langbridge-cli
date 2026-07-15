@@ -14,7 +14,7 @@ from langbridge_code.util.agent_worklog import (
     write_worklog_received,
     write_worklog_step,
 )
-from langbridge_code.context.common.budget import prepare_agent_messages
+from langbridge_code.context.common.budget import messages_with_budget_notice, prepare_agent_messages
 from langbridge_code.context.agent_context import finish_step, init_agent_context
 from langbridge_code.context.foreground import ForegroundTracker
 from langbridge_code.util.progress import (
@@ -34,8 +34,10 @@ from langbridge_code.settings import (
     MAX_AGENT_SECONDS,
     MAX_AGENT_STEPS,
     PROGRESS_NOTE_REMINDER_ROUNDS,
+    model_for_agent,
 )
 from langbridge_code.tools import MAIN_TOOL_SCHEMAS, MAIN_TOOLS
+from langbridge_code.tools.approval import approval_reason
 from langbridge_code.tools.ask_user import ASK_USER_TOOL_SCHEMA, resolve_ask_user
 from langbridge_code.tools.note_progress import NOTE_FORK_INSTRUCTION, NOTE_PROGRESS_TOOL_SCHEMA
 from langbridge_code.tools.remember import REMEMBER_TOOL_SCHEMA
@@ -68,9 +70,10 @@ MAIN_AGENT_TOOL_SCHEMAS = (
 
 PROGRESS_NOTE_REMINDER = (
     "[HOOK] More than {rounds} rounds have passed without a progress note. "
-    "If anything meaningful was completed or decided since the last note, call "
-    "note_progress in your next step (it forks a note-writer that summarizes "
-    "the work since the last note); otherwise keep going."
+    "Call note_progress NOW, before any other tool call: record what you have "
+    "done since the last note and the current state of the task. This is "
+    "required, not optional — if this context is lost, progress.md is the only "
+    "record. Then continue working."
 )
 
 
@@ -114,6 +117,7 @@ class MainAgentSession:
         self.label = "LangBridge"
         self.step = 0
         self._rounds_since_progress_note = 0
+        self._last_user_prompt = ""
         # <memory>/<progress>/<skill_index> blocks are prefetched on first send.
         del history_briefing_pending  # superseded by the pinned context blocks
         self._context_blocks_ready = False
@@ -162,7 +166,7 @@ class MainAgentSession:
         self.tools.update({
             "agent_planner": build_agent_planner_tool(
                 api_key=self.api_key,
-                model=self.model,
+                model=model_for_agent("planner", self.model),
                 run_log_path=self.run_log_path,
                 turn_id=self.turn_id,
                 trace_sink=self.trace_sink,
@@ -171,7 +175,7 @@ class MainAgentSession:
             ),
             "agent_worker": build_agent_worker_tool(
                 api_key=self.api_key,
-                model=self.model,
+                model=model_for_agent("worker", self.model),
                 run_log_path=self.run_log_path,
                 turn_id=self.turn_id,
                 messages=self.messages,
@@ -183,7 +187,7 @@ class MainAgentSession:
             ),
             "agent_explorer": build_agent_explorer_tool(
                 api_key=self.api_key,
-                model=self.model,
+                model=model_for_agent("explorer", self.model),
                 run_log_path=self.run_log_path,
                 turn_id=self.turn_id,
                 trace_sink=self.trace_sink,
@@ -211,7 +215,7 @@ class MainAgentSession:
         """Run LangBridge rounds until the evaluator confirms the goal or limits hit."""
         evaluator = GoalEvaluatorAgent(
             self.api_key,
-            eval_model or self.model,
+            eval_model or model_for_agent("evaluator", self.model),
             run_log_path=self.run_log_path,
             trace_sink=self.trace_sink,
         )
@@ -258,29 +262,42 @@ class MainAgentSession:
         emit_phase(self.phase_sink, "summarizing")
         return last_reply, goal
 
-    def _refresh_memory_and_progress_blocks(self, task=""):
+    def _refresh_memory_and_progress_blocks(self, task="", *, include_traces=False):
         """Prefetch <memory> (one LLM pass over memory.md) and re-read <progress>.
 
         Runs on the first send and again after every compaction — the head of
         the context is dropped and rebuilt from possibly-updated memory, and
-        progress.md is re-concatenated.
+        progress.md is re-concatenated. On the first send (cold start / resume)
+        the block is the raw traces when they fully fit the resume budget,
+        otherwise the progress notes plus the traces after the last progress
+        boundary (rounds not yet summarized into progress.md).
         """
         from langbridge_code.memory import prefetch_memory
 
         stack = self.context.stack
         stack.set_memory_block(
-            prefetch_memory(self.api_key, self.model, task or self.target or "")
+            prefetch_memory(
+                self.api_key,
+                self.model,
+                task or self._last_user_prompt or self.target or "",
+            )
         )
         progress = read_progress(self.run_log_path).strip()
         if progress == PROGRESS_HEADER.strip():
             progress = ""
+        if include_traces:
+            from langbridge_code.util.session_traces import build_resume_background
+
+            progress = build_resume_background(
+                self.run_log_path, model=self.model, progress=progress
+            )
         stack.set_progress_block(progress)
 
     def _init_context_blocks(self, user_prompt):
         """First-send prefetch: <memory> + <progress> + <skill_index>."""
         from langbridge_code.skills import ensure_skill_index_block, langbridge_skill_catalog
 
-        self._refresh_memory_and_progress_blocks(task=user_prompt)
+        self._refresh_memory_and_progress_blocks(task=user_prompt, include_traces=True)
         ensure_skill_index_block(
             self.context.stack,
             self.api_key,
@@ -295,6 +312,9 @@ class MainAgentSession:
         self._context_blocks_ready = True
 
     def send(self, user_prompt):
+        # Remembered so the post-compaction <memory> re-prefetch targets the
+        # current task instead of an empty string.
+        self._last_user_prompt = (user_prompt or "").strip()
         if not self._context_blocks_ready:
             self._init_context_blocks(user_prompt)
         turn_content = build_turn_user_content(self.run_log_path, user_prompt)
@@ -319,7 +339,7 @@ class MainAgentSession:
                     lambda: create_model_response(
                         self.api_key,
                         self.model,
-                        self.messages,
+                        messages_with_budget_notice(self.messages, self.model),
                         tool_schemas=MAIN_AGENT_TOOL_SCHEMAS,
                         reasoning={"summary": "auto"},
                         label=self.label,
@@ -403,7 +423,14 @@ class MainAgentSession:
             elif name not in self.tools:
                 raise ValueError(f"Unknown {self.label} tool: {name}")
             else:
-                if name in {"read_plan", "clear_plan", "update_plan", "merge_branch"}:
+                risk = approval_reason(name, arguments)
+                if (
+                    risk
+                    and self.approval_callback is not None
+                    and not self.approval_callback(self.label, name, arguments)
+                ):
+                    raise PermissionError(f"{name} was not approved ({risk})")
+                if name == "merge_branch":
                     arguments["run_log_path"] = self.run_log_path
                 output = self.tools[name](**arguments)
         except Exception as error:
