@@ -1,3 +1,5 @@
+import json
+
 from langbridge_code.util.progress import (
     PROGRESS_HEADER,
     append_progress_note,
@@ -89,6 +91,24 @@ def test_read_conversation_handles_content_part_lists(tmp_path):
         ],
     )
     assert read_conversation(run_log) == [("user", "hi"), ("assistant", "part reply")]
+
+
+def test_read_conversation_hides_background_tool_result_events(tmp_path):
+    run_log = tmp_path / "session-demo"
+    run_log.mkdir()
+    append_raw_round(
+        run_log,
+        1,
+        [
+            {
+                "role": "user",
+                "content": "<background_tool_results>\nworker completed\n</background_tool_results>",
+            },
+            {"role": "assistant", "content": "merged worker result"},
+        ],
+    )
+
+    assert read_conversation(run_log) == [("assistant", "merged worker result")]
 
 
 def test_read_conversation_empty_traces(tmp_path):
@@ -239,6 +259,20 @@ def test_maybe_compact_progress_merges_middle_turns(tmp_path, monkeypatch):
     assert "## Turn 5" in text
     assert "- merged middle work" in text
     assert "did thing 3" not in text
+    records = [
+        json.loads(line)
+        for line in (run_log / "traces" / "compactions.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ]
+    assert records[0]["type"] == "progress_compaction"
+    if "full_event_attachment" in records[0]:
+        attachment = run_log / "traces" / records[0]["full_event_attachment"]
+        full_event = json.loads(attachment.read_text(encoding="utf-8"))
+    else:
+        full_event = records[0]
+    assert "did thing 3" in full_event["input"]["progress_markdown"]
+    assert "merged middle work" in full_event["output"]["progress_markdown"]
 
 
 def test_maybe_compact_progress_noop_under_budget(tmp_path):

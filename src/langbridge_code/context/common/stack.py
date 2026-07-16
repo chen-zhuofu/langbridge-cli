@@ -88,6 +88,8 @@ class ContextStack:
         # Called after a successful prose compaction so the owner can refresh
         # the <memory> / <progress> blocks (re-prefetch, re-read progress.md).
         self.on_compacted = None
+        # Audit hook receiving the complete compacted input and output.
+        self.on_compaction = None
 
         self._pending_user: str | None = None
 
@@ -210,7 +212,7 @@ class ContextStack:
         items = [copy.deepcopy(messages[index + offset]) for offset in indices]
         return items, index + max(indices) + 1
 
-    def complete_step(self, step_items: list[dict]) -> None:
+    def complete_step(self, step_items: list[dict]) -> list[dict]:
         """Record one agent step (assistant output + tool results)."""
         round_messages: list[dict] = []
         if self._pending_user is not None:
@@ -218,6 +220,7 @@ class ContextStack:
             self._pending_user = None
         round_messages.extend(copy.deepcopy(step_items))
         self.raw_rounds.append(round_messages)
+        return copy.deepcopy(round_messages)
 
     def maybe_advance(
         self,
@@ -298,6 +301,8 @@ class ContextStack:
         batch = self.raw_rounds[: len(self.raw_rounds) - self.raw_keep]
         if not batch:
             return False
+        before_tokens = self.token_count()
+        before_round_count = len(self.raw_rounds)
         prior_prose = self.compact_prose
         merged = self._prose_compactor(
             api_key,
@@ -310,4 +315,30 @@ class ContextStack:
             return False
         self.compact_prose = merged
         self.raw_rounds = self.raw_rounds[len(batch) :]
+        if self.on_compaction is not None:
+            event = {
+                "type": "active_context_compaction",
+                "model": model,
+                "role": self.label,
+                "before": {
+                    "tokens": before_tokens,
+                    "raw_round_count": before_round_count,
+                    "prior_compact_prose": prior_prose,
+                },
+                "input": {
+                    "prior_compact_prose": prior_prose,
+                    "rounds": copy.deepcopy(batch),
+                },
+                "output": {
+                    "compact_prose": merged,
+                },
+                "after": {
+                    "tokens": self.token_count(),
+                    "raw_round_count": len(self.raw_rounds),
+                },
+            }
+            try:
+                self.on_compaction(event)
+            except Exception:
+                pass
         return True

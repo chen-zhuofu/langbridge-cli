@@ -2,18 +2,16 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { Box, Text, useApp, useInput, useStdout } from "ink";
 
 import { Bridge } from "./bridge.js";
+import { copyToClipboard } from "./clipboard.js";
 import type { EngineEvent, SessionItem } from "./protocol.js";
 import { ChatLine, makeLine } from "./state.js";
 import { HELP_TEXT } from "./help.js";
 import { ACCENT, YELLOW } from "./theme.js";
 import { Banner } from "./components/Banner.js";
 import { ChatLog, totalRowCount } from "./components/ChatLog.js";
-import { Composer } from "./components/Composer.js";
+import { Composer, composerRowCount } from "./components/Composer.js";
 import { SessionPicker } from "./components/SessionPicker.js";
 import { StatusBar } from "./components/StatusBar.js";
-
-const INPUT_LINES_MIN = 3;
-const INPUT_LINES_MAX = 12;
 
 interface EngineState {
   state: string;
@@ -62,7 +60,6 @@ export function App() {
   const [, setInputVersion] = useState(0);
   const input = inputRef.current;
   const cursor = cursorRef.current;
-  const [inputLines, setInputLines] = useState(INPUT_LINES_MIN);
   const [scrollOffset, setScrollOffset] = useState(0);
   const [picker, setPicker] = useState<{ sessions: SessionItem[]; highlighted: number; startup: boolean } | null>(null);
   const [pendingApproval, setPendingApproval] = useState(false);
@@ -82,22 +79,38 @@ export function App() {
     };
   }, [stdout]);
 
-  // Mouse wheel scrolling: enable SGR mouse reporting (like the old Textual
-  // TUI). Wheel events arrive as escape sequences handled in the key handler.
-  // Opt out with LANGBRIDGE_TUI_MOUSE=0 (restores normal terminal selection).
-  const mouseEnabled = !["0", "false", "no", "off"].includes(
-    (process.env["LANGBRIDGE_TUI_MOUSE"] || "").trim().toLowerCase(),
+  // Terminal mouse reporting is all-or-nothing: wheel scroll needs it, but
+  // native drag-select cannot work while it is on. Default ON so the wheel
+  // scrolls the chat. Ctrl+E toggles select mode (mouse off). Clicks do not
+  // auto-switch — that made scrolling die after the first accidental click.
+  // LANGBRIDGE_TUI_MOUSE=0 starts in select mode. Ctrl+O copies last reply.
+  // While selecting, stream HUD updates are frozen so Ink redraws do not wipe
+  // the terminal selection (same reason the composer caret does not blink).
+  const [mouseEnabled, setMouseEnabled] = useState(
+    !["0", "false", "no", "off"].includes(
+      (process.env["LANGBRIDGE_TUI_MOUSE"] || "").trim().toLowerCase(),
+    ),
   );
+  const mouseEnabledRef = useRef(mouseEnabled);
+  mouseEnabledRef.current = mouseEnabled;
+  const disableMouseReporting = useCallback((stream: NodeJS.WriteStream) => {
+    // Clear every common tracking mode; leftover 1002/1003 blocks selection.
+    stream.write("\u001b[?1000l\u001b[?1002l\u001b[?1003l\u001b[?1005l\u001b[?1006l\u001b[?1015l\u001b[?1016l");
+  }, []);
   useEffect(() => {
-    if (!stdout || !mouseEnabled) return;
-    stdout.write("\u001b[?1000;1006h");
-    const disable = () => stdout.write("\u001b[?1000;1006l");
+    if (!stdout) return;
+    if (mouseEnabled) {
+      stdout.write("\u001b[?1000;1006h");
+    } else {
+      disableMouseReporting(stdout);
+    }
+    const disable = () => disableMouseReporting(stdout);
     process.on("exit", disable);
     return () => {
       process.off("exit", disable);
       disable();
     };
-  }, [stdout, mouseEnabled]);
+  }, [stdout, mouseEnabled, disableMouseReporting]);
 
   const sessionsRef = useRef<SessionItem[]>([]);
   const engineRef = useRef(engine);
@@ -163,6 +176,8 @@ export function App() {
           );
           break;
         case "stream":
+          // Select mode freezes HUD redraws so drag-selection is not cleared.
+          if (!mouseEnabledRef.current) break;
           setThinking({
             role: event.role,
             text: event.kind === "action_stream" ? `→ ${event.text}` : event.text,
@@ -284,6 +299,12 @@ export function App() {
     }, 150);
   }, [bridge, writeSystem]);
 
+  const copyLastAssistant = useCallback(() => {
+    const last = [...linesRef.current].reverse().find((line) => line.kind === "assistant");
+    if (!last) return;
+    copyToClipboard(stdout, last.text);
+  }, [stdout]);
+
   const handleCommand = useCallback(
     (text: string) => {
       const parts = text.split(/\s+/);
@@ -297,6 +318,9 @@ export function App() {
           break;
         case "/help":
           writeSystem(HELP_TEXT);
+          break;
+        case "/copy":
+          copyLastAssistant();
           break;
         case "/new":
           bridge.send({ type: "new_session" });
@@ -349,7 +373,7 @@ export function App() {
           writeSystem(`Unknown command: ${cmd}. Try /help.`, "warn");
       }
     },
-    [bridge, exit, openPicker, sessionAt, writeSystem],
+    [bridge, copyLastAssistant, exit, openPicker, sessionAt, writeSystem],
   );
 
   const bumpInput = useCallback(() => setInputVersion((version) => version + 1), []);
@@ -393,16 +417,19 @@ export function App() {
   );
 
   handleKeyRef.current = (char, key) => {
-    // Mouse reporting (SGR): wheel up = button 64, wheel down = 65. Ink strips
-    // the leading ESC, so match with it optional. Clicks are stripped below.
+    // Mouse reporting (SGR): wheel up = 64, wheel down = 65. Clicks are ignored
+    // so accidental clicks do not steal wheel mode; use Ctrl+E for select.
+    // Ink strips the leading ESC.
     if (char) {
       const wheelEvents = char.match(/(?:\u001b)?\[<6[45];\d+;\d+[Mm]/g);
       if (wheelEvents && wheelEvents.length > 0) {
         let delta = 0;
-        for (const event of wheelEvents) delta += event.includes("<64;") ? 3 : -3;
+        for (const event of wheelEvents) delta += event.includes("<64;") ? 5 : -5;
         if (delta !== 0) scrollBy(delta);
         return;
       }
+      // Drop leftover click/drag reports so they are not typed into the composer.
+      if (/(?:\u001b)?\[<\d+;\d+;\d+[Mm]/.test(char)) return;
     }
 
     if (picker) {
@@ -437,6 +464,11 @@ export function App() {
       return;
     }
 
+    if (key.ctrl && (key.upArrow || key.downArrow)) {
+      scrollBy(key.upArrow ? 5 : -5);
+      return;
+    }
+
     if (key.ctrl) {
       switch (char) {
         case "a":
@@ -460,6 +492,37 @@ export function App() {
         case "b":
           setBannerVisible((visible) => !visible);
           return;
+        case "e":
+          setMouseEnabled((enabled) => !enabled);
+          return;
+        case "o":
+          copyLastAssistant();
+          return;
+        case "u":
+          // Clear from start of current line to cursor (shell-like).
+          editInput((value, position) => {
+            const lineStart = value.lastIndexOf("\n", position - 1) + 1;
+            return [value.slice(0, lineStart) + value.slice(position), lineStart];
+          });
+          return;
+        case "k":
+          // Kill to end of current line.
+          editInput((value, position) => {
+            const lineEnd = value.indexOf("\n", position);
+            const end = lineEnd === -1 ? value.length : lineEnd;
+            return [value.slice(0, position) + value.slice(end), position];
+          });
+          return;
+        case "w":
+          // Delete previous word.
+          editInput((value, position) => {
+            if (position === 0) return [value, 0];
+            let start = position;
+            while (start > 0 && /\s/.test(value[start - 1])) start -= 1;
+            while (start > 0 && !/\s/.test(value[start - 1])) start -= 1;
+            return [value.slice(0, start) + value.slice(position), start];
+          });
+          return;
         case "c":
           bridge.quit();
           exit();
@@ -479,7 +542,9 @@ export function App() {
       return;
     }
 
-    if (key.return && !char.includes("\r") && !char.includes("\n")) {
+    // Bare Enter only. Paste chunks that embed \r/\n may also set key.return;
+    // those must fall through and insert as text (not submit line-by-line).
+    if (key.return && (!char || char === "\r")) {
       if (key.shift) {
         editInput((value, position) => [value.slice(0, position) + "\n" + value.slice(position), position + 1]);
       } else {
@@ -487,6 +552,9 @@ export function App() {
       }
       return;
     }
+    // Ink maps terminal Backspace (\x7f on Linux/SSH/VS Code) to key.delete,
+    // and only \b to key.backspace. Treat both as backward-delete so typing
+    // backspace at the end of the line actually removes characters.
     if (key.backspace || key.delete) {
       editInput((value, position) =>
         position > 0 ? [value.slice(0, position - 1) + value.slice(position), position - 1] : [value, position],
@@ -499,6 +567,21 @@ export function App() {
     }
     if (key.rightArrow) {
       editInput((value, position) => [value, position + 1]);
+      return;
+    }
+    // Home / End — Ink exposes these as key.home / key.end when available.
+    if (key.home) {
+      editInput((value, position) => {
+        const lineStart = value.lastIndexOf("\n", position - 1) + 1;
+        return [value, lineStart];
+      });
+      return;
+    }
+    if (key.end) {
+      editInput((value, position) => {
+        const lineEnd = value.indexOf("\n", position);
+        return [value, lineEnd === -1 ? value.length : lineEnd];
+      });
       return;
     }
     if (key.upArrow || key.downArrow) {
@@ -524,26 +607,29 @@ export function App() {
       return;
     }
     if (char && !key.ctrl && !key.meta) {
+      // Fallback if a terminal delivers raw BS/DEL without key flags.
+      if (char === "\x7f" || char === "\b") {
+        editInput((value, position) =>
+          position > 0 ? [value.slice(0, position - 1) + value.slice(position), position - 1] : [value, position],
+        );
+        return;
+      }
       // Strip terminal control sequences that leak over SSH, plus mouse
       // click/release reports (ESC may already be stripped by Ink).
       const cleaned = char
         .replace(/(?:\u001b)?\[<\d+;\d+;\d+[Mm]/g, "")
-        .replace(/\u001b\[[0-9;<>=?]*[a-zA-Z~]/g, "");
+        .replace(/\u001b\[[0-9;<>=?]*[a-zA-Z~]/g, "")
+        .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, "");
       if (!cleaned) return;
-      // A chunk may contain several characters (fast typing / paste) and may
-      // embed Enter (\r) or Ctrl+J (\n): insert text segments, submit on \r,
-      // newline on \n.
-      const segments = cleaned.split(/(\r|\n)/);
-      for (const segment of segments) {
-        if (!segment) continue;
-        if (segment === "\r") {
-          submit();
-        } else if (segment === "\n") {
-          editInput((value, position) => [value.slice(0, position) + "\n" + value.slice(position), position + 1]);
-        } else {
-          editInput((value, position) => [value.slice(0, position) + segment + value.slice(position), position + segment.length]);
-        }
-      }
+      // Fast typing / paste arrives as one chunk and often uses \r or \r\n as
+      // line breaks. Always insert — never submit mid-chunk (that sent each
+      // pasted line as its own message).
+      const normalized = cleaned.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+      if (!normalized) return;
+      editInput((value, position) => [
+        value.slice(0, position) + normalized + value.slice(position),
+        position + normalized.length,
+      ]);
       setScrollOffset(0);
     }
   };
@@ -556,7 +642,7 @@ export function App() {
   // exceeds the real rendered height, the whole layout overflows the terminal
   // and Ink cannot repaint the top rows (stale/garbled lines when scrolling).
   const bannerRows = bannerVisible ? 11 : 0;
-  const composerRows = Math.max(inputLines, Math.min(input.split("\n").length, INPUT_LINES_MAX)) + 2;
+  const composerRows = composerRowCount(input, width - 4);
   const thinkingRows = thinking ? 1 : 0;
   const chatHeight = Math.max(3, height - bannerRows - composerRows - thinkingRows - 2);
   chatViewRef.current = { height: chatHeight, width: width - 4 };
@@ -585,7 +671,13 @@ export function App() {
         </Box>
       ) : null}
       <Box marginX={2} flexDirection="column">
-        <Composer value={input} cursor={cursor} lines={inputLines} focused={!picker} />
+        <Composer
+          value={input}
+          cursor={cursor}
+          width={width - 4}
+          focused={!picker}
+          busy={engine.turnActive}
+        />
       </Box>
       <StatusBar
         model={hello.model}
@@ -598,7 +690,6 @@ export function App() {
         cwd={hello.cwd}
         gitBranch={hello.gitBranch}
         contextLine={contextLine}
-        bannerVisible={bannerVisible}
       />
     </Box>
   );

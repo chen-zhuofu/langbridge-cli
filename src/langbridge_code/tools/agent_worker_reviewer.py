@@ -160,8 +160,6 @@ REVIEWER_TOOLS = {
 }
 
 _APPROVAL_LOCK = threading.Lock()
-_WORKTREE_INDEX_LOCK = threading.Lock()
-_worktree_index_by_session: dict[str, int] = {}
 
 def is_merge_task_prompt(task: str) -> bool:
     cleaned = clean_task_text(task).lower()
@@ -183,15 +181,17 @@ AGENT_WORKER_TOOL_SCHEMA = {
     "name": "agent_worker",
     "description": (
         "Launch the worker-reviewer subagent for exactly one todo subtask. "
-        "The worker starts with ZERO context and never reads your plan file: the "
+        "A new task starts without your chat context and never reads your plan file: the "
         "task_contract must be a word-for-word copy of that task's complete "
         "markdown block in todo_list.md. Put exploration findings — exact file "
         "paths, key functions/classes with line ranges, relevant snippets, and "
         "how the pieces connect — in supplemental_context, without changing the "
         "contract. "
         "One subtask per call — do not paste the entire plan or bundle todos. "
-        "Every coding dispatch — single or batched — runs in its own isolated git "
+        "Every new coding task — single or batched — runs in its own isolated git "
         "worktree branched from HEAD, and the result reports its feature branch. "
+        "Re-dispatching the exact same contract with the same task_name resumes "
+        "that task's failed worktree, progress note, and trace tail. "
         "Merge each ready branch yourself with the merge_branch tool (never via "
         "agent_worker) before dispatching todos that depend on it. When several "
         "todos in todo_list.md are independent and unblocked, you may call "
@@ -200,11 +200,12 @@ AGENT_WORKER_TOOL_SCHEMA = {
         "The worker never touches todo_list.md — you own every task's status "
         "(unassigned, dispatched/in progress, finished): on reviewer PASS, mark "
         "the matching line `[x]` yourself with edit_file. "
-        "On failure, partial work is committed on the task's worktree branch "
-        "(the main workspace is untouched) and the summary describes the leftover "
-        "state. You decide what happens next: merge_branch that branch and "
-        "re-dispatch agent_worker to continue from the partial state, or discard "
-        "it and revise todo_list.md (edit_file). "
+        "On stop before approval, partial work is preserved on the task's worktree "
+        "branch (normal non-PASS returns are committed; hard Stop leaves completed "
+        "edits in place). Leave it unmerged and re-dispatch the same "
+        "contract/task_name with the previous return in supplemental_context. "
+        "Only merge a completed/PASS branch. If the contract changes, use a fresh "
+        "task_name. "
         "Returns a final summary only."
     ),
     "parameters": {
@@ -225,7 +226,10 @@ AGENT_WORKER_TOOL_SCHEMA = {
                 "description": (
                     "Additional facts discovered after the contract was written: "
                     "exact paths, line ranges, relevant snippets, and how components "
-                    "connect. Must not override or reinterpret the task contract."
+                    "connect. When resuming the same task_name, include the previous "
+                    "agent_worker return so the worker knows why it stopped and what "
+                    "review feedback remains. Must not override or reinterpret the "
+                    "task contract."
                 ),
             },
             "description": {
@@ -422,6 +426,7 @@ def new_reviewer_session(
     run_log_path=None,
     turn_id=None,
     phase_sink=None,
+    task_name="",
 ):
     tools, schemas = build_reviewer_toolkit(
         task_type=task_type,
@@ -441,6 +446,7 @@ def new_reviewer_session(
         trace_sink=trace_sink,
         run_log_path=run_log_path,
         turn_id=turn_id,
+        task_name=task_name,
     )
 
 
@@ -457,6 +463,7 @@ def run_worker(
     turn_id=None,
     session=None,
     user_prompt=None,
+    task_name="",
 ):
     if session is None:
         session = new_worker_session(
@@ -467,15 +474,31 @@ def run_worker(
             approval_callback=approval_callback,
             run_log_path=run_log_path,
             turn_id=turn_id,
+            task_name=task_name,
         )
     prompt = user_prompt if user_prompt is not None else worker_user_prompt(task, context, feedback)
     return session.send(prompt, assigned_task=task)
 
 
-def run_reviewer(api_key, model, task, context="", trace_sink=None, run_log_path=None, turn_id=None, session=None):
+def run_reviewer(
+    api_key,
+    model,
+    task,
+    context="",
+    trace_sink=None,
+    run_log_path=None,
+    turn_id=None,
+    session=None,
+    task_name="",
+):
     if session is None:
         session = new_reviewer_session(
-            api_key, model, trace_sink=trace_sink, run_log_path=run_log_path, turn_id=turn_id
+            api_key,
+            model,
+            trace_sink=trace_sink,
+            run_log_path=run_log_path,
+            turn_id=turn_id,
+            task_name=task_name,
         )
     return session.send(reviewer_user_prompt(task, context), assigned_task=task)
 
@@ -510,9 +533,15 @@ class WorkerSession:
             system_prompt=self._worker_system_prompt,
             run_log_path=run_log_path,
             label=self.label,
+            task_name=task_name,
         )
         self.task_progress = TaskProgress(
-            api_key, model, run_log_path, task_name, label=self.label
+            api_key,
+            model,
+            run_log_path,
+            task_name,
+            label=self.label,
+            current_trace=self.context.agent_trace_path,
         )
         self.tools = dict(tools)
         self.tool_schemas = list(tool_schemas)
@@ -672,6 +701,7 @@ class ReviewerSession:
         trace_sink=None,
         run_log_path=None,
         turn_id=None,
+        task_name="",
     ):
         self.api_key = api_key
         self.model = model
@@ -687,7 +717,18 @@ class ReviewerSession:
             system_prompt=self._reviewer_system_prompt,
             run_log_path=run_log_path,
             label=self.label,
+            task_name=task_name,
         )
+        self.task_progress = TaskProgress(
+            api_key,
+            model,
+            run_log_path,
+            task_name,
+            label=self.label,
+            current_trace=self.context.agent_trace_path,
+        )
+        if self.task_progress.enabled:
+            self.task_progress.attach(self.context.stack, self.messages)
         self.step = 0
         self.assigned_task: str | None = None
         self._send_start_time: float | None = None
@@ -1046,12 +1087,13 @@ def run_worker_reviewer_loop(
     phase_sink=None,
     cwd=None,
     task_name="",
+    base_snapshot=None,
 ) -> tuple[bool, str]:
     """One loop from LangBridge: worker until ready → reviewer → repeat; shared step budget."""
     normalized = normalize_task_type(task_type)
     use_git = normalized == "coding"
     git_root = _git_cwd(cwd)
-    snapshot = snapshot_head(git_root) if use_git else None
+    snapshot = (base_snapshot or snapshot_head(git_root)) if use_git else None
     locked_approval = _locked_approval(approval_callback)
     worker = new_worker_session(
         api_key,
@@ -1072,6 +1114,7 @@ def run_worker_reviewer_loop(
         run_log_path=run_log_path,
         turn_id=turn_id,
         phase_sink=phase_sink,
+        task_name=task_name,
     )
     loop_budget = WorkerReviewerLoopBudget(max_steps=MAX_WORKER_REVIEWER_STEPS)
     phase = "worker"
@@ -1179,22 +1222,23 @@ def run_worker_reviewer_loop(
     return False, report + (partial_work_note(snapshot, git_root) if use_git else "")
 
 
-def _next_worktree_index(run_log_path) -> int:
-    key = str(Path(run_log_path).resolve()) if run_log_path else "default"
-    with _WORKTREE_INDEX_LOCK:
-        index = _worktree_index_by_session.get(key, 0) + 1
-        _worktree_index_by_session[key] = index
-        return index
-
-
-def _parallel_worktree_context(task: str, worktree_path: Path) -> str:
-    return "\n".join(
-        [
-            "You are working in an isolated git worktree for this task only.",
-            f"Worktree path: {worktree_path}",
-            "Do not modify files outside this worktree.",
-        ]
-    )
+def _parallel_worktree_context(task: str, worktree_path: Path, *, resumed=False) -> str:
+    lines = [
+        "You are working in an isolated git worktree for this task only.",
+        f"Worktree path: {worktree_path}",
+        "Do not modify files outside this worktree.",
+    ]
+    if resumed:
+        lines.extend(
+            [
+                "This is the SAME task resumed after an earlier incomplete dispatch.",
+                "The worktree already contains its partial work. Inspect it "
+                "before editing; continue from it rather than restarting.",
+                "Your <progress> block also includes this task's earlier progress note "
+                "and recoverable raw trace tail.",
+            ]
+        )
+    return "\n".join(lines)
 
 
 def _run_worker_in_worktree(
@@ -1211,11 +1255,15 @@ def _run_worker_in_worktree(
     turn_id,
     approval_callback,
     task_name="",
+    resumed=False,
 ) -> tuple[bool, str]:
     task_text = clean_task_text(task)
     scoped_context = "\n\n".join(
         part
-        for part in (context(task_text), _parallel_worktree_context(task, worktree_info.path))
+        for part in (
+            context(task_text),
+            _parallel_worktree_context(task, worktree_info.path, resumed=resumed),
+        )
         if part
     )
     with workspace_scope(worktree_info.path):
@@ -1232,6 +1280,7 @@ def _run_worker_in_worktree(
             approval_callback=approval_callback,
             cwd=worktree_info.path,
             task_name=task_name,
+            base_snapshot=worktree_info.base_commit,
         )
 
 
@@ -1265,38 +1314,55 @@ def dispatch_worker(
         and worktree_mod.is_git_repo()
     )
     worktree_info = None
+    resumed = False
     if use_worktree:
+        worktree_info = worktree_mod.resumable_worktree(
+            run_log_path,
+            task_name=task_name,
+            task_description=task,
+        )
+        resumed = worktree_info is not None
         try:
-            worktree_info = worktree_mod.create_worktree(
-                run_log_path,
-                _next_worktree_index(run_log_path),
-                task,
-            )
+            if worktree_info is None:
+                worktree_info = worktree_mod.create_worktree(
+                    run_log_path,
+                    task,
+                    task_name=task_name,
+                )
         except RuntimeError as error:
             return f"[{description or 'worker'}] Worktree setup failed.\n\n{error}"
 
     if worktree_info is not None:
-        passed, detail = _run_worker_in_worktree(
-            api_key=api_key,
-            model=model,
-            task=task,
-            context=context,
-            task_type=normalized,
-            worktree_info=worktree_info,
-            trace_sink=trace_sink,
-            phase_sink=phase_sink,
-            run_log_path=run_log_path,
-            turn_id=turn_id,
-            approval_callback=approval_callback,
-            task_name=task_name,
-        )
+        worktree_mod.record_branch(run_log_path, worktree_info, "working")
+        try:
+            passed, detail = _run_worker_in_worktree(
+                api_key=api_key,
+                model=model,
+                task=task,
+                context=context,
+                task_type=normalized,
+                worktree_info=worktree_info,
+                trace_sink=trace_sink,
+                phase_sink=phase_sink,
+                run_log_path=run_log_path,
+                turn_id=turn_id,
+                approval_callback=approval_callback,
+                task_name=task_name,
+                resumed=resumed,
+            )
+        except control.StopRequested:
+            # Hard stop must return immediately, so do not run a commit hook.
+            # Keep the existing worktree (including uncommitted edits) and index
+            # it for the same-task re-dispatch path.
+            worktree_mod.record_branch(run_log_path, worktree_info, "failed")
+            raise
         if not passed:
             # Preserve partial work on the task branch so it survives worktree
             # cleanup and can be merged later if the main agent wants it.
             commit_task("worker-partial", task, worktree_info.path)
         worktree_mod.record_branch(run_log_path, worktree_info, "ready" if passed else "failed")
         blocked = worker_blocked(detail)
-        status = "completed" if passed else ("blocked" if blocked else "stopped (review did not pass)")
+        status = "completed" if passed else ("blocked" if blocked else "stopped before approval")
         branch_note = f"\n\nWorktree branch: {worktree_info.branch}"
         if passed:
             branch_note += " (ready to merge)"
@@ -1307,9 +1373,9 @@ def dispatch_worker(
             )
         else:
             branch_note += (
-                " (partial work is committed on this branch — merge_branch it to "
-                "continue from that state in the main workspace, or leave it and "
-                "dispatch a fresh worker)"
+                " (partial work is committed on this branch — do NOT merge it yet; "
+                "re-dispatch the same task_contract with the same task_name and the "
+                "previous return in supplemental_context to resume here)"
             )
         return f"[{description or 'worker'}] Worktree task {status}.{branch_note}\n\n{detail}{_todo_completion_suffix(passed)}"
 
@@ -1328,7 +1394,9 @@ def dispatch_worker(
         approval_callback=approval_callback,
         task_name=task_name,
     )
-    status = "completed" if passed else ("blocked" if worker_blocked(detail) else "stopped (review did not pass)")
+    status = "completed" if passed else (
+        "blocked" if worker_blocked(detail) else "stopped before approval"
+    )
     return f"[{description or 'worker'}] Single-task {status}.\n\n{detail}{_todo_completion_suffix(passed)}"
 
 

@@ -56,7 +56,13 @@ def _message_text(item: dict) -> str:
 
 # Engine-injected user messages (hooks, status blocks, pinned background);
 # not part of the human conversation, so hidden from resume replay.
-_INJECTED_PREFIXES = ("[HOOK]", "[CONTEXT_STATUS]", "<background>", "<assigned_task>")
+_INJECTED_PREFIXES = (
+    "[HOOK]",
+    "[CONTEXT_STATUS]",
+    "<background>",
+    "<background_tool_results>",
+    "<assigned_task>",
+)
 
 
 def read_conversation(run_log_path) -> list[tuple[str, str]]:

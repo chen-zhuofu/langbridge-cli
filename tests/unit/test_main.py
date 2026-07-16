@@ -35,6 +35,17 @@ def test_main_agent_records_every_subagent_result_in_progress():
     assert "one note_progress call per result" in prompt
 
 
+def test_main_agent_must_resolve_consequential_ambiguity_before_acting():
+    prompt = langbridge_system_prompt()
+
+    assert "Ambiguity gate" in prompt
+    assert "two\nor more interpretations" in prompt
+    assert "MUST ask the user to choose before continuing" in prompt
+    assert "answer is still compatible with multiple" in prompt
+    assert '"Mac app"' in prompt
+    assert "substantial rework" in prompt
+
+
 def test_engineering_guidelines_live_in_specialist_prompts():
     assert "Think before coding." not in WORKER_ENGINEER_PROMPT
     assert "WORKER_STATUS: READY_FOR_REVIEW" in WORKER_ENGINEER_PROMPT

@@ -8,7 +8,8 @@ description: Use when multi-step work needs a todo_list.md but the plan is alrea
 This is the self-planning playbook for your middle triage tier: multi-step work
 whose plan is obvious. Light work needs no plan at all. Heavy planning
 (research, trade-offs, decomposition) goes to agent_planner — do not do it
-yourself. Write the plan to `todo_list.md` at the workspace root (write tool)
+yourself. Write the plan to the session-artifact virtual path `todo_list.md`
+with the write tool; never leave a copy in the workspace root
 before dispatching any agent_worker.
 
 # Writing Simple Plans

@@ -33,6 +33,43 @@ def test_worktree_registry_records_ready_branch(tmp_path):
     assert worktree_mod.ready_branches(run_log) == ["lb/session/t1-auth"]
 
 
+def test_failed_worktree_resumes_only_for_same_task_name_and_contract(tmp_path):
+    run_log = tmp_path / "run.json"
+    worktree = tmp_path / "wt"
+    worktree.mkdir()
+    info = worktree_mod.WorktreeInfo(
+        branch="lb/session/t3-applications",
+        path=worktree,
+        task_description="Implement applications API",
+        task_name="task-3-applications",
+        base_commit="abc123",
+    )
+    worktree_mod.record_branch(run_log, info, "failed")
+
+    resumed = worktree_mod.resumable_worktree(
+        run_log,
+        task_name="task-3-applications",
+        task_description="Implement applications API",
+    )
+    assert resumed == info
+    assert (
+        worktree_mod.resumable_worktree(
+            run_log,
+            task_name="task-4-interviews",
+            task_description="Implement applications API",
+        )
+        is None
+    )
+    assert (
+        worktree_mod.resumable_worktree(
+            run_log,
+            task_name="task-3-applications",
+            task_description="Changed contract",
+        )
+        is None
+    )
+
+
 def test_create_worktree_in_git_repo(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -46,7 +83,13 @@ def test_create_worktree_in_git_repo(tmp_path):
     run_log = tmp_path / "run.json"
     with patch.object(worktree_mod, "WORKSPACE_ROOT", repo):
         with patch.object(worktree_mod, "AGENT_STATE_DIR", tmp_path / "agent-state"):
-            info = worktree_mod.create_worktree(run_log, 1, "Add auth API")
+            info = worktree_mod.create_worktree(
+                run_log,
+                "Add auth API",
+                task_name="task-auth-api",
+            )
     assert info.path.exists()
     assert (info.path / "README").exists()
+    assert info.path.name == "task-auth-api"
+    assert info.branch.endswith("/task-auth-api")
     worktree_mod.remove_worktree(info, force=True)

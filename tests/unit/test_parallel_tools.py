@@ -3,7 +3,9 @@ import time
 
 import pytest
 
+from langbridge_code.agents.common import control
 from langbridge_code.agents.common.parallel_tools import (
+    CompletionDrivenToolRunner,
     PARALLEL_TOOL_NAMES,
     can_run_tool_calls_in_parallel,
     run_tool_calls,
@@ -109,3 +111,73 @@ def test_parallel_agents_disabled_runs_serial(monkeypatch):
     assert not can_run_tool_calls_in_parallel(calls)
     run_tool_calls(run_fn, calls, max_workers=2)
     assert order == ["a", "b"]
+
+
+def test_completion_runner_returns_first_result_without_waiting_for_batch():
+    release_slow = threading.Event()
+
+    def run_fn(call):
+        if call["call_id"] == "slow":
+            release_slow.wait(timeout=1)
+        return {
+            "type": "function_call_output",
+            "call_id": call["call_id"],
+            "output": call["call_id"],
+        }
+
+    runner = CompletionDrivenToolRunner(run_fn, max_workers=2)
+    try:
+        runner.submit(
+            [
+                {"name": "agent_worker", "call_id": "slow"},
+                {"name": "agent_worker", "call_id": "fast"},
+            ]
+        )
+        completed = runner.drain_completed(wait_for_one=True)
+
+        assert [item.output["output"] for item in completed] == ["fast"]
+        assert runner.has_pending()
+
+        release_slow.set()
+        completed = runner.drain_completed(wait_for_one=True)
+        assert [item.output["output"] for item in completed] == ["slow"]
+        assert not runner.has_pending()
+    finally:
+        release_slow.set()
+        runner.close()
+
+
+def test_completion_runner_converts_background_exception_to_tool_error():
+    def run_fn(_call):
+        raise RuntimeError("boom")
+
+    with CompletionDrivenToolRunner(run_fn, max_workers=1) as runner:
+        runner.submit([{"name": "agent_worker", "call_id": "broken"}])
+        completed = runner.drain_completed(wait_for_one=True)
+
+    assert completed[0].output["call_id"] == "broken"
+    assert completed[0].output["output"] == "Tool error: boom"
+
+
+def test_completion_runner_wait_is_interruptible():
+    release_worker = threading.Event()
+
+    def run_fn(call):
+        release_worker.wait(timeout=1)
+        return {
+            "type": "function_call_output",
+            "call_id": call["call_id"],
+            "output": "done",
+        }
+
+    runner = CompletionDrivenToolRunner(run_fn, max_workers=1)
+    control.clear_stop()
+    try:
+        runner.submit([{"name": "agent_worker", "call_id": "slow"}])
+        threading.Timer(0.05, control.request_stop).start()
+        with pytest.raises(control.StopRequested):
+            runner.drain_completed(wait_for_one=True)
+    finally:
+        release_worker.set()
+        control.clear_stop()
+        runner.close()

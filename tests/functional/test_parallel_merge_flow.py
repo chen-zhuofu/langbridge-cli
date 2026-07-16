@@ -97,9 +97,17 @@ def test_parallel_workers_then_main_agent_merges(repo, tmp_path, monkeypatch):
 
     # Every coding dispatch gets its own worktree; here two run concurrently.
     with ThreadPoolExecutor(max_workers=2) as pool:
-        future_auth = pool.submit(agent_worker, prompt="Add auth", description="auth")
+        future_auth = pool.submit(
+            agent_worker,
+            prompt="Add auth",
+            description="auth",
+            task_name="task-auth",
+        )
         future_billing = pool.submit(
-            agent_worker, prompt="Add billing", description="billing"
+            agent_worker,
+            prompt="Add billing",
+            description="billing",
+            task_name="task-billing",
         )
         reply_auth = future_auth.result(timeout=30)
         reply_billing = future_billing.result(timeout=30)
@@ -156,6 +164,7 @@ def test_parallel_workers_then_main_agent_merges(repo, tmp_path, monkeypatch):
     reply_verify = agent_worker(
         prompt="Verify merged codebase (after tasks 1 and 2)",
         description="verify",
+        task_name="task-verify-merged",
     )
     assert "Worktree task completed" in reply_verify
     assert "mark that line `[x]` yourself" in reply_verify
@@ -164,7 +173,11 @@ def test_parallel_workers_then_main_agent_merges(repo, tmp_path, monkeypatch):
 def test_conflict_resolution_round_trip_with_real_worktree(repo, tmp_path):
     """Conflicting branch: merge_branch reports files, manual resolve, confirm cleans up."""
     run_log = tmp_path / "run.json"
-    info = worktree_mod.create_worktree(run_log, 1, "Edit base file")
+    info = worktree_mod.create_worktree(
+        run_log,
+        "Edit base file",
+        task_name="edit-base-file",
+    )
     (info.path / "base.txt").write_text("worktree version\n")
     _git(info.path, "add", "-A")
     _git(info.path, "commit", "-m", "worktree change")

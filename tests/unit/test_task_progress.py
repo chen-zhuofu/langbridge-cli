@@ -7,6 +7,7 @@ from langbridge_code.util.progress import (
     last_progress_turn_id,
     read_progress,
 )
+from langbridge_code.util.agent_traces import append_agent_raw_round, reserve_agent_trace
 
 
 def test_task_progress_path_is_stable_per_task_name(tmp_path):
@@ -52,6 +53,32 @@ def test_attach_pins_existing_notes_as_progress_block(tmp_path):
     progress.attach(stack, [])
     assert "wrote WumpusGame.move" in (stack.progress_block or "")
     assert progress.turn_id == 2
+
+
+def test_attach_cold_resume_includes_prior_raw_trace(tmp_path):
+    prior, prior_id = reserve_agent_trace(tmp_path, "Worker", "task-3")
+    append_agent_raw_round(
+        prior,
+        role="Worker",
+        task_name="task-3",
+        instance_id=prior_id,
+        round_index=0,
+        messages=[{"role": "assistant", "content": "Stopped while fixing PUT semantics"}],
+    )
+    current, _ = reserve_agent_trace(tmp_path, "Worker", "task-3")
+    progress = TaskProgress(
+        "key",
+        "kimi-k2.7-code",
+        tmp_path,
+        "task-3",
+        label="Worker",
+        current_trace=current,
+    )
+    stack = _stack()
+
+    progress.attach(stack, [])
+
+    assert "Stopped while fixing PUT semantics" in (stack.progress_block or "")
 
 
 def test_attach_without_task_name_is_disabled(tmp_path):

@@ -252,9 +252,15 @@ class ExploreSession:
             system_prompt=self._explorer_system_prompt,
             run_log_path=run_log_path,
             label=self.label,
+            task_name=task_name,
         )
         self.task_progress = TaskProgress(
-            api_key, model, run_log_path, task_name, label=self.label
+            api_key,
+            model,
+            run_log_path,
+            task_name,
+            label=self.label,
+            current_trace=self.context.agent_trace_path,
         )
         self.tools = dict(tools)
         self.tool_schemas = list(tool_schemas)

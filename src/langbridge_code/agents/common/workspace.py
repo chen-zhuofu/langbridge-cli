@@ -14,12 +14,35 @@ def get_workspace_root() -> Path:
     return Path(WORKSPACE_ROOT).resolve()
 
 
+def get_plan_file_override() -> Path | None:
+    return getattr(_tls, "plan_file", None)
+
+
 def set_workspace_root(path: Path | None) -> None:
     if path is None:
         if hasattr(_tls, "root"):
             delattr(_tls, "root")
     else:
         _tls.root = path.resolve()
+
+
+@contextmanager
+def plan_file_scope(path: Path | None):
+    """Temporarily map relative todo_list.md access to a session artifact."""
+    previous = getattr(_tls, "plan_file", None)
+    if path is None:
+        if hasattr(_tls, "plan_file"):
+            delattr(_tls, "plan_file")
+    else:
+        _tls.plan_file = Path(path).resolve()
+    try:
+        yield
+    finally:
+        if previous is None:
+            if hasattr(_tls, "plan_file"):
+                delattr(_tls, "plan_file")
+        else:
+            _tls.plan_file = previous
 
 
 @contextmanager

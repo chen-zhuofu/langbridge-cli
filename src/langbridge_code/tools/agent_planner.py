@@ -62,8 +62,8 @@ AGENT_PLANNER_TOOL_SCHEMA = {
         "Offload plan research/drafting so repo exploration stays OUT of your "
         "main-agent context. You get ONE draft result back — not the planner's "
         "tool trace. Review that draft as if you wrote it; ask the user if "
-        "ambiguous; then write the final plan yourself to todo_list.md at the "
-        "workspace root (write tool). Do not dispatch agent_worker before "
+        "ambiguous; then write the final plan yourself to the session-artifact "
+        "virtual path todo_list.md (write tool). Do not dispatch agent_worker before "
         "todo_list.md is written. If todo_list.md already holds an unfinished "
         "plan, ask the user first whether to continue it, replace it, or start "
         "fresh — do not silently overwrite."
@@ -102,6 +102,7 @@ def run_planner(
     trace_sink=None,
     run_log_path=None,
     turn_id=None,
+    task_name="",
 ) -> str:
     session = PlannerSession(
         api_key,
@@ -113,6 +114,7 @@ def run_planner(
         trace_sink=trace_sink,
         run_log_path=run_log_path,
         turn_id=turn_id,
+        task_name=task_name,
     )
     return session.send(prompt)
 
@@ -181,6 +183,7 @@ class PlannerSession:
         trace_sink=None,
         run_log_path=None,
         turn_id=None,
+        task_name="",
     ):
         self.api_key = api_key
         self.model = model
@@ -195,6 +198,7 @@ class PlannerSession:
             system_prompt=system_prompt,
             run_log_path=run_log_path,
             label=label,
+            task_name=task_name,
         )
         self.step = 0
 
@@ -291,6 +295,7 @@ def dispatch_planner(
     turn_id,
     trace_sink=None,
     phase_sink=None,
+    task_name="",
     **kwargs,
 ):
     emit_phase(phase_sink, "planning")
@@ -301,6 +306,7 @@ def dispatch_planner(
         trace_sink=trace_sink,
         run_log_path=run_log_path,
         turn_id=turn_id,
+        task_name=task_name,
     )
     task_type = parse_plan_task_type(report)
     type_label = task_type or "unknown"
@@ -313,8 +319,8 @@ def dispatch_planner(
         "requirements, Acceptance spec, Deliverables, Verify, Out of scope, and deps.",
         "2. Reject vague or contradictory acceptance criteria; ask_user when code and "
         "the request cannot resolve them — do not make a worker guess.",
-        "3. Write the final markdown (edited as needed) to todo_list.md at the "
-        "workspace root with the write tool.",
+        "3. Write the final markdown (edited as needed) to the session-artifact "
+        "virtual path todo_list.md with the write tool.",
         "4. Only then dispatch agent_worker. Copy one complete task contract "
         "word-for-word into task_contract and put only new repository facts in "
         "supplemental_context (pass task_type "
@@ -338,7 +344,6 @@ def build_agent_planner_tool(
     **kwargs,
 ):
     def agent_planner(prompt, description="", task_name=""):
-        del task_name  # accepted for a uniform subagent interface; planner keeps no task notes
         return dispatch_planner(
             prompt,
             description=description,
@@ -348,6 +353,7 @@ def build_agent_planner_tool(
             turn_id=turn_id,
             trace_sink=trace_sink,
             phase_sink=phase_sink,
+            task_name=(task_name or "").strip(),
         )
 
     return agent_planner

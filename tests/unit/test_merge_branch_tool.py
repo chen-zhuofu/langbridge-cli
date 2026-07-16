@@ -27,6 +27,8 @@ def repo(tmp_path, monkeypatch):
     monkeypatch.setattr(
         "langbridge_code.tools.merge_branch.get_workspace_root", lambda: root
     )
+    monkeypatch.setattr(worktree_mod, "WORKSPACE_ROOT", root)
+    monkeypatch.setattr(worktree_mod, "AGENT_STATE_DIR", tmp_path / "agent-state")
     return root
 
 
@@ -68,13 +70,11 @@ def test_merge_branch_rejects_unknown_branch(repo, tmp_path):
     reply = merge_branch("lb/run/t9-nope", run_log_path=run_log)
 
     assert reply.startswith("Tool error:")
-    assert "not in ready branches" in reply
+    assert "is not ready" in reply
     assert worktree_mod.ready_branches(run_log) == ["lb/run/t1-auth"]
 
 
-def test_merge_branch_accepts_failed_branch_with_partial_work(repo, tmp_path):
-    """A failed worker branch carries committed partial work; the main agent
-    may merge it to continue from that state."""
+def test_merge_branch_rejects_failed_branch_for_in_place_resume(repo, tmp_path):
     run_log = tmp_path / "run.json"
     branch = "lb/run/t1-auth"
     _make_branch(repo, branch, "auth.txt", "half done\n")
@@ -86,8 +86,9 @@ def test_merge_branch_accepts_failed_branch_with_partial_work(repo, tmp_path):
 
     reply = merge_branch(branch, run_log_path=run_log)
 
-    assert f"Merged {branch!r}" in reply
-    assert (repo / "auth.txt").read_text() == "half done\n"
+    assert reply.startswith("Tool error:")
+    assert "Only reviewer-PASS branches can be merged" in reply
+    assert not (repo / "auth.txt").exists()
 
 
 def test_merge_branch_conflict_leaves_merge_in_progress(repo, tmp_path):
@@ -117,3 +118,35 @@ def test_merge_branch_conflict_leaves_merge_in_progress(repo, tmp_path):
     confirm = merge_branch(branch, run_log_path=run_log)
     assert "is merged into HEAD" in confirm
     assert worktree_mod.ready_branches(run_log) == []
+
+
+def test_successful_merge_cleans_only_requested_worktree(repo, tmp_path):
+    run_log = tmp_path / "session-artifacts"
+    stale_branch = "lb/run/stale-retry"
+    stale_path = worktree_mod.worktrees_dir(run_log) / "t1-stale-retry"
+    stale_path.parent.mkdir(parents=True)
+    _git(repo, "worktree", "add", "-b", stale_branch, str(stale_path), "HEAD")
+    (stale_path / "stale.txt").write_text("included later\n", encoding="utf-8")
+    _git(stale_path, "add", "-A")
+    _git(stale_path, "commit", "-m", "stale retry work")
+    _git(repo, "merge", "--no-edit", stale_branch)
+    assert stale_path.exists()
+
+    ready_branch = "lb/run/t2-ready"
+    _make_branch(repo, ready_branch, "ready.txt", "ready\n")
+    worktree_mod.record_branch(
+        run_log,
+        worktree_mod.WorktreeInfo(
+            ready_branch,
+            worktree_mod.worktrees_dir(run_log) / "missing-ready",
+            "Ready task",
+        ),
+        "ready",
+    )
+
+    reply = merge_branch(ready_branch, run_log_path=run_log)
+
+    assert f"Merged {ready_branch!r}" in reply
+    assert stale_path.exists()
+    listing = _git(repo, "worktree", "list", "--porcelain")
+    assert stale_branch in listing

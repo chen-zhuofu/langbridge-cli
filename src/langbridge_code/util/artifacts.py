@@ -1,4 +1,4 @@
-"""Artifact session paths: {workspace}/artifacts/session-{slug}-{timestamp}/."""
+"""Artifact session paths under artifacts/{project}/session-{slug}-{timestamp}/."""
 from __future__ import annotations
 
 import re

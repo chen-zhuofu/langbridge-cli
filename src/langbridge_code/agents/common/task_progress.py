@@ -24,12 +24,22 @@ TASK_NOTE_REMINDER = (
 class TaskProgress:
     """Binds one subagent session to its task progress file."""
 
-    def __init__(self, api_key, model, run_log_path, task_name, *, label="Subagent"):
+    def __init__(
+        self,
+        api_key,
+        model,
+        run_log_path,
+        task_name,
+        *,
+        label="Subagent",
+        current_trace=None,
+    ):
         self.api_key = api_key
         self.model = model
         self.run_log_path = run_log_path
         self.task_name = (task_name or "").strip()
         self.label = label
+        self.current_trace = current_trace
         self.turn_id = 0
         self._stack = None
         self._messages = None
@@ -48,7 +58,7 @@ class TaskProgress:
         self._stack = stack
         self._messages = messages
         self.turn_id = last_progress_turn_id(self.run_log_path, self.task_name) + 1
-        self.refresh_block()
+        self.refresh_block(include_traces=True)
         previous = stack.on_compacted
 
         def on_compacted(compacted_stack):
@@ -61,7 +71,7 @@ class TaskProgress:
 
         stack.on_compacted = on_compacted
 
-    def refresh_block(self) -> None:
+    def refresh_block(self, *, include_traces=False) -> None:
         if self._stack is None or not self.enabled:
             return
         from langbridge_code.util.progress import PROGRESS_HEADER, read_progress
@@ -69,6 +79,17 @@ class TaskProgress:
         content = read_progress(self.run_log_path, self.task_name).strip()
         if content == PROGRESS_HEADER.strip():
             content = ""
+        if include_traces:
+            from langbridge_code.util.agent_traces import build_agent_resume_background
+
+            content = build_agent_resume_background(
+                self.run_log_path,
+                role=self.label,
+                task_name=self.task_name,
+                model=self.model,
+                progress=content,
+                exclude_trace=self.current_trace,
+            )
         self._stack.set_progress_block(content)
 
     def write_note(self, **_ignored) -> str:

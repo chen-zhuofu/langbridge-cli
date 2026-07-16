@@ -1,3 +1,6 @@
+import threading
+
+from langbridge_code.agents.common.workspace import workspace_scope
 from langbridge_code.agents.main_agent import (
     MAIN_AGENT_TOOL_SCHEMAS,
     MainAgentSession,
@@ -39,6 +42,7 @@ def test_main_agent_tool_schemas_include_full_toolkit_and_subagents():
         "agent_planner",
         "agent_worker",
         "agent_explorer",
+        "memory_writer",
     } <= names
 
 
@@ -111,6 +115,211 @@ def test_main_agent_run_turn_does_not_finalize_locally(tmp_path, monkeypatch):
     assert reply == "Done."
     assert not logged["finalize"]
     assert session.messages[-1] == {"role": "assistant", "content": "Done."}
+
+
+def test_memory_writer_tool_forks_live_context_and_skips_end_hook(tmp_path, monkeypatch):
+    run_log = tmp_path / "run.json"
+    calls = {"model": 0, "writer": 0, "scheduled": 0}
+
+    monkeypatch.setattr("langbridge_code.agents.main_agent.emit_phase", lambda *a, **k: None)
+    monkeypatch.setattr("langbridge_code.agents.main_agent.write_worklog_received", lambda *a, **k: None)
+    monkeypatch.setattr("langbridge_code.agents.main_agent.write_worklog_step", lambda *a, **k: None)
+    monkeypatch.setattr("langbridge_code.agents.main_agent.write_worklog_observation", lambda *a, **k: None)
+    monkeypatch.setattr("langbridge_code.agents.main_agent.write_worklog_finish", lambda *a, **k: None)
+
+    def fake_response(*args, **kwargs):
+        calls["model"] += 1
+        if calls["model"] == 1:
+            return {
+                "output": [
+                    {
+                        "type": "function_call",
+                        "name": "memory_writer",
+                        "call_id": "memory-1",
+                        "arguments": '{"purpose":"save user correction"}',
+                    }
+                ]
+            }
+        return {
+            "output": [
+                {
+                    "type": "message",
+                    "content": [{"type": "output_text", "text": "Done."}],
+                }
+            ]
+        }
+
+    def fake_writer(api_key, model, messages):
+        calls["writer"] += 1
+        assert any("不清楚就问我" in str(message) for message in messages)
+        return "Updated feedback memory."
+
+    monkeypatch.setattr("langbridge_code.agents.main_agent.create_model_response", fake_response)
+    monkeypatch.setattr("langbridge_code.memory.run_memory_writer_agent", fake_writer)
+    monkeypatch.setattr(
+        "langbridge_code.memory.schedule_memory_writer",
+        lambda *args, **kwargs: calls.__setitem__("scheduled", calls["scheduled"] + 1),
+    )
+    session = MainAgentSession(
+        "key",
+        "model",
+        [{"role": "system", "content": "sys"}],
+        run_log,
+        1,
+        target="不清楚就问我",
+    )
+    session._context_blocks_ready = True
+
+    assert session.run_turn("不清楚就问我") == "Done."
+    assert calls == {"model": 2, "writer": 1, "scheduled": 0}
+
+
+def test_plan_file_lives_only_in_session_artifacts(tmp_path, monkeypatch):
+    from langbridge_code.agents.common import todo_list
+
+    workspace = tmp_path / "workspace"
+    artifacts = tmp_path / "session-artifacts"
+    workspace.mkdir()
+    artifacts.mkdir()
+    monkeypatch.setattr(todo_list, "plan_path", lambda: workspace / "todo_list.md")
+
+    with workspace_scope(workspace):
+        session = MainAgentSession(
+            "key",
+            "model",
+            [{"role": "system", "content": "sys"}],
+            artifacts,
+            1,
+            target="build",
+        )
+        session._run_tool(
+            {
+                "name": "write",
+                "call_id": "write-plan",
+                "arguments": (
+                    '{"purpose":"write plan","path":"todo_list.md",'
+                    '"content":"- [ ] Task 1\\n"}'
+                ),
+            }
+        )
+        assert (artifacts / "todo_list.md").read_text(encoding="utf-8") == "- [ ] Task 1\n"
+        assert not (workspace / "todo_list.md").exists()
+
+        session._run_tool(
+            {
+                "name": "edit_file",
+                "call_id": "tick-plan",
+                "arguments": (
+                    '{"purpose":"mark done","path":"todo_list.md",'
+                    '"old_string":"- [ ]","new_string":"- [x]"}'
+                ),
+            }
+        )
+        assert (artifacts / "todo_list.md").read_text(encoding="utf-8") == "- [x] Task 1\n"
+        assert not (workspace / "todo_list.md").exists()
+
+
+def test_session_start_migrates_legacy_workspace_plan(tmp_path, monkeypatch):
+    from langbridge_code.agents.common import todo_list
+
+    workspace = tmp_path / "workspace"
+    artifacts = tmp_path / "session-artifacts"
+    workspace.mkdir()
+    artifacts.mkdir()
+    legacy = workspace / "todo_list.md"
+    legacy.write_text("- [ ] Legacy task\n", encoding="utf-8")
+    monkeypatch.setattr(todo_list, "plan_path", lambda: legacy)
+
+    with workspace_scope(workspace):
+        MainAgentSession(
+            "key",
+            "model",
+            [{"role": "system", "content": "sys"}],
+            artifacts,
+            1,
+            target="continue",
+        )
+
+    assert not legacy.exists()
+    assert (artifacts / "todo_list.md").read_text(encoding="utf-8") == "- [ ] Legacy task\n"
+
+
+def test_main_agent_handles_first_worker_result_while_another_runs(tmp_path, monkeypatch):
+    run_log = tmp_path / "run.json"
+    messages = [{"role": "system", "content": "sys"}]
+    release_slow = threading.Event()
+    model_round = 0
+
+    monkeypatch.setattr("langbridge_code.agents.main_agent.emit_phase", lambda *a, **k: None)
+    monkeypatch.setattr("langbridge_code.agents.main_agent.write_worklog_received", lambda *a, **k: None)
+    monkeypatch.setattr("langbridge_code.agents.main_agent.write_worklog_step", lambda *a, **k: None)
+    monkeypatch.setattr("langbridge_code.agents.main_agent.write_worklog_observation", lambda *a, **k: None)
+    monkeypatch.setattr("langbridge_code.agents.main_agent.write_worklog_finish", lambda *a, **k: None)
+
+    def fake_response(*args, **kwargs):
+        nonlocal model_round
+        model_round += 1
+        current_messages = kwargs.get("messages") or args[2]
+        rendered = str(current_messages)
+        if model_round == 1:
+            return {
+                "output": [
+                    {
+                        "type": "function_call",
+                        "name": "agent_worker",
+                        "call_id": "slow",
+                        "arguments": '{"description":"slow","task_name":"slow"}',
+                    },
+                    {
+                        "type": "function_call",
+                        "name": "agent_worker",
+                        "call_id": "fast",
+                        "arguments": '{"description":"fast","task_name":"fast"}',
+                    },
+                ]
+            }
+        if model_round == 2:
+            assert "fast result" in rendered
+            assert "Background task started and is still running" in rendered
+            assert not release_slow.is_set()
+            release_slow.set()
+            return {
+                "output": [
+                    {
+                        "type": "message",
+                        "content": [{"type": "output_text", "text": "Handled fast result."}],
+                    }
+                ]
+            }
+        assert "<background_tool_results>" in rendered
+        assert "slow result" in rendered
+        return {
+            "output": [
+                {
+                    "type": "message",
+                    "content": [{"type": "output_text", "text": "All workers handled."}],
+                }
+            ]
+        }
+
+    monkeypatch.setattr("langbridge_code.agents.main_agent.create_model_response", fake_response)
+    session = MainAgentSession("key", "model", messages, run_log, 1, target="go")
+    session._context_blocks_ready = True
+
+    def fake_run_tool(call):
+        if call["call_id"] == "slow":
+            release_slow.wait(timeout=1)
+        return {
+            "type": "function_call_output",
+            "call_id": call["call_id"],
+            "output": f"{call['call_id']} result",
+        }
+
+    session._run_tool = fake_run_tool
+    reply = session.run_turn("go")
+
+    assert reply == "All workers handled."
+    assert model_round == 3
 
 
 def test_main_agent_session_injects_session_context(monkeypatch, tmp_path):

@@ -1,8 +1,15 @@
 """Main LangBridge agent: persistent session with full tools and subagent delegation."""
 import json
+import threading
 
 from langbridge_code.agents.common import control
-from langbridge_code.agents.common.parallel_tools import run_tool_calls
+from langbridge_code.agents.common.parallel_tools import (
+    BACKGROUND_TOOL_NAMES,
+    CompletionDrivenToolRunner,
+    run_tool_calls,
+)
+from langbridge_code.agents.common.todo_list import artifact_plan_path, migrate_workspace_plan
+from langbridge_code.agents.common.workspace import plan_file_scope
 from langbridge_code.agents.common.limits import now, over_time_budget
 from langbridge_code.llm.client import create_model_response
 from langbridge_code.agents.system_prompt import langbridge_system_prompt
@@ -39,9 +46,8 @@ from langbridge_code.settings import (
 from langbridge_code.tools import MAIN_TOOL_SCHEMAS, MAIN_TOOLS
 from langbridge_code.tools.approval import approval_reason
 from langbridge_code.tools.ask_user import ASK_USER_TOOL_SCHEMA, resolve_ask_user
+from langbridge_code.tools.memory_writer import MEMORY_WRITER_TOOL_SCHEMA
 from langbridge_code.tools.note_progress import NOTE_FORK_INSTRUCTION, NOTE_PROGRESS_TOOL_SCHEMA
-from langbridge_code.tools.remember import REMEMBER_TOOL_SCHEMA
-from langbridge_code.memory import write_memory
 from langbridge_code.agents.common.phases import emit_phase
 from langbridge_code.agents.goal_evaluator import GoalEvaluatorAgent
 from langbridge_code.util.goal import (
@@ -64,7 +70,7 @@ SUBAGENT_TOOL_SCHEMAS = [
 
 MAIN_AGENT_TOOL_SCHEMAS = (
     list(MAIN_TOOL_SCHEMAS)
-    + [ASK_USER_TOOL_SCHEMA, NOTE_PROGRESS_TOOL_SCHEMA, REMEMBER_TOOL_SCHEMA]
+    + [ASK_USER_TOOL_SCHEMA, NOTE_PROGRESS_TOOL_SCHEMA, MEMORY_WRITER_TOOL_SCHEMA]
     + list(SUBAGENT_TOOL_SCHEMAS)
 )
 
@@ -74,6 +80,16 @@ PROGRESS_NOTE_REMINDER = (
     "done since the last note and the current state of the task. This is "
     "required, not optional — if this context is lost, progress.md is the only "
     "record. Then continue working."
+)
+
+BACKGROUND_PENDING = (
+    "Background task started and is still running. Its real result will arrive "
+    "later in a <background_tool_results> event. Do not merge or mark its todo "
+    "complete from this placeholder."
+)
+
+PLAN_FILE_TOOL_NAMES = frozenset(
+    {"read_file", "read_many", "write", "edit_file", "delete_file"}
 )
 
 
@@ -118,6 +134,8 @@ class MainAgentSession:
         self.step = 0
         self._rounds_since_progress_note = 0
         self._last_user_prompt = ""
+        self._memory_writer_ran_this_send = False
+        self._context_lock = threading.RLock()
         # <memory>/<progress>/<skill_index> blocks are prefetched on first send.
         del history_briefing_pending  # superseded by the pinned context blocks
         self._context_blocks_ready = False
@@ -135,6 +153,7 @@ class MainAgentSession:
         )
         self.tools = {**MAIN_TOOLS}
         self._rebuild_subagent_tools()
+        migrate_workspace_plan(self.run_log_path)
 
     def bind_turn(
         self,
@@ -311,24 +330,124 @@ class MainAgentSession:
         )
         self._context_blocks_ready = True
 
+    @staticmethod
+    def _background_result_event(completed_calls) -> str:
+        sections = []
+        for completed in completed_calls:
+            call = completed.call
+            try:
+                arguments = without_purpose(json.loads(call.get("arguments") or "{}"))
+            except (TypeError, ValueError):
+                arguments = {}
+            identity = ", ".join(
+                value
+                for value in (
+                    f"description={arguments.get('description')!r}" if arguments.get("description") else "",
+                    f"task_name={arguments.get('task_name')!r}" if arguments.get("task_name") else "",
+                )
+                if value
+            )
+            heading = f"{call.get('name')} call_id={call.get('call_id')}"
+            if identity:
+                heading += f" ({identity})"
+            sections.append(f"{heading}\n{completed.output.get('output', '')}")
+        body = "\n\n---\n\n".join(sections)
+        return (
+            "<background_tool_results>\n"
+            "Previously launched subagent calls have completed. Process every "
+            "result now: note it, merge and check off PASS tasks, handle failures "
+            "or BLOCKED tasks, and dispatch newly unblocked work while other "
+            "background calls continue.\n\n"
+            f"{body}\n"
+            "</background_tool_results>"
+        )
+
+    def _deliver_background_results(self, completed_calls) -> None:
+        if not completed_calls:
+            return
+        with self._context_lock:
+            self.context.begin_turn(self._background_result_event(completed_calls))
+        for completed in completed_calls:
+            write_worklog_observation(
+                self.run_log_path,
+                self.label,
+                self.worklog_id,
+                self.turn_id,
+                self.step,
+                completed.output,
+            )
+
+    def _run_completion_driven_tool_step(self, tool_calls, background_runner):
+        background_calls = [
+            call for call in tool_calls if call.get("name") in BACKGROUND_TOOL_NAMES
+        ]
+        foreground_calls = [
+            call for call in tool_calls if call.get("name") not in BACKGROUND_TOOL_NAMES
+        ]
+        outputs_by_id = {}
+        deferred = []
+
+        if background_calls:
+            background_runner.submit(background_calls)
+
+        if foreground_calls:
+            for output in run_tool_calls(self._run_tool, foreground_calls):
+                outputs_by_id[output.get("call_id")] = output
+
+        if background_calls:
+            completed = background_runner.drain_completed(
+                wait_for_one=not foreground_calls
+            )
+            current_ids = {call.get("call_id") for call in background_calls}
+            for item in completed:
+                call_id = item.call.get("call_id")
+                if call_id in current_ids:
+                    outputs_by_id[call_id] = item.output
+                else:
+                    deferred.append(item)
+
+        outputs = []
+        for call in tool_calls:
+            call_id = call.get("call_id")
+            output = outputs_by_id.get(call_id)
+            if output is None:
+                output = {
+                    "type": "function_call_output",
+                    "call_id": call_id,
+                    "output": BACKGROUND_PENDING,
+                }
+            outputs.append(output)
+        return outputs, deferred
+
     def send(self, user_prompt):
         # Remembered so the post-compaction <memory> re-prefetch targets the
         # current task instead of an empty string.
         self._last_user_prompt = (user_prompt or "").strip()
+        self._memory_writer_ran_this_send = False
         if not self._context_blocks_ready:
             self._init_context_blocks(user_prompt)
         turn_content = build_turn_user_content(self.run_log_path, user_prompt)
-        self.context.begin_turn(turn_content)
+        with self._context_lock:
+            self.context.begin_turn(turn_content)
         write_worklog_received(self.run_log_path, self.label, self.worklog_id, self.turn_id, user_prompt)
         foreground = ForegroundTracker(self.label, self.messages, self.model)
         foreground.activate()
         start_time = now()
+        background_runner = CompletionDrivenToolRunner(self._run_tool)
+        deferred_background_results = []
         try:
             for _ in range(MAX_AGENT_STEPS):
                 control.checkpoint()
                 if over_time_budget(start_time, MAX_AGENT_SECONDS):
                     return self._finish(f"{self.label} stopped: out of time.")
-                self.context.compact_to_budget(api_key=self.api_key, model=self.model)
+                completed = [
+                    *deferred_background_results,
+                    *background_runner.drain_completed(),
+                ]
+                deferred_background_results = []
+                self._deliver_background_results(completed)
+                with self._context_lock:
+                    self.context.compact_to_budget(api_key=self.api_key, model=self.model)
                 budget = prepare_agent_messages(
                     self.messages,
                     self.model,
@@ -351,24 +470,35 @@ class MainAgentSession:
                 if not tool_calls:
                     print_step_trace(output, include_message=True, label=self.label, sink=self.trace_sink)
                     if output:
-                        finish_step(self.context, list(output), self, budget)
+                        with self._context_lock:
+                            finish_step(self.context, list(output), self, budget)
                         foreground.publish()
+                    if background_runner.has_pending():
+                        completed = background_runner.drain_completed(wait_for_one=True)
+                        self._deliver_background_results(completed)
+                        continue
                     return self._finish(extract_output_text(output))
                 print_step_trace(output, include_message=True, label=self.label, sink=self.trace_sink)
                 write_worklog_step(self.run_log_path, self.label, self.worklog_id, self.turn_id, self.step, output)
                 step_items = list(output)
-                tool_outputs = run_tool_calls(self._run_tool, tool_calls)
+                tool_outputs, deferred = self._run_completion_driven_tool_step(
+                    tool_calls,
+                    background_runner,
+                )
+                deferred_background_results.extend(deferred)
                 for tool_output in tool_outputs:
                     step_items.append(tool_output)
                     write_worklog_observation(
                         self.run_log_path, self.label, self.worklog_id, self.turn_id, self.step, tool_output
                     )
                 self.step += 1
-                finish_step(self.context, step_items, self, budget)
+                with self._context_lock:
+                    finish_step(self.context, step_items, self, budget)
                 self._maybe_remind_progress_note()
                 foreground.publish()
             return self._finish(f"{self.label} stopped: max steps.")
         finally:
+            background_runner.close()
             foreground.deactivate()
 
     def _maybe_remind_progress_note(self):
@@ -377,9 +507,10 @@ class MainAgentSession:
         if self._rounds_since_progress_note <= PROGRESS_NOTE_REMINDER_ROUNDS:
             return
         self._rounds_since_progress_note = 0
-        self.context.begin_turn(
-            PROGRESS_NOTE_REMINDER.format(rounds=PROGRESS_NOTE_REMINDER_ROUNDS)
-        )
+        with self._context_lock:
+            self.context.begin_turn(
+                PROGRESS_NOTE_REMINDER.format(rounds=PROGRESS_NOTE_REMINDER_ROUNDS)
+            )
 
     def _write_progress_note_via_fork(self):
         """Fork a one-pass note-writer on the live context (prefix cache) and
@@ -414,12 +545,15 @@ class MainAgentSession:
             elif name == "note_progress":
                 output = self._write_progress_note_via_fork()
                 self._rounds_since_progress_note = 0
-            elif name == "remember":
-                output = write_memory(
-                    arguments.get("scope", ""),
-                    arguments.get("title", ""),
-                    arguments.get("content", ""),
+            elif name == "memory_writer":
+                from langbridge_code.memory import run_memory_writer_agent
+
+                output = run_memory_writer_agent(
+                    self.api_key,
+                    self.model,
+                    list(self.messages),
                 )
+                self._memory_writer_ran_this_send = True
             elif name not in self.tools:
                 raise ValueError(f"Unknown {self.label} tool: {name}")
             else:
@@ -432,18 +566,25 @@ class MainAgentSession:
                     raise PermissionError(f"{name} was not approved ({risk})")
                 if name == "merge_branch":
                     arguments["run_log_path"] = self.run_log_path
-                output = self.tools[name](**arguments)
+                plan_target = (
+                    artifact_plan_path(self.run_log_path)
+                    if name in PLAN_FILE_TOOL_NAMES
+                    else None
+                )
+                with plan_file_scope(plan_target):
+                    output = self.tools[name](**arguments)
         except Exception as error:
             output = f"Tool error: {error}"
         return {"type": "function_call_output", "call_id": call_id, "output": output}
 
     def _finish(self, report):
-        from langbridge_code.memory import schedule_memory_extraction
+        from langbridge_code.memory import schedule_memory_writer
 
         write_worklog_finish(self.run_log_path, self.label, self.worklog_id, self.turn_id, report)
-        # Fork the memory-writer agent on the live context: reviews this turn
-        # in the background, writes any missed durable memories, then exits.
-        schedule_memory_extraction(self.api_key, self.model, self.messages)
+        # A mid-turn Memory Writer already reconciled this context. Otherwise
+        # fork the same tool-using writer in the background to catch omissions.
+        if not self._memory_writer_ran_this_send:
+            schedule_memory_writer(self.api_key, self.model, self.messages)
         return report
 
 

@@ -9,7 +9,7 @@
       },
       "openai": {
         "base_url": "",
-        "model": "gpt-5.1-codex"
+        "model": "gpt-5.3-codex"
       },
       "deepseek": {
         "base_url": "https://api.deepseek.com",
@@ -30,28 +30,28 @@
   },
   "max_guidance": 12,
   "agent": {
-    "max_agent_steps": 50,
-    "max_agent_seconds": 3600,
-    "max_explorer_steps": 30,
-    "max_explorer_seconds": 900,
-    "max_worker_steps": 30,
-    "max_worker_seconds": 900,
-    "max_reviewer_steps": 30,
-    "max_reviewer_seconds": 900,
-    "max_workflow_seconds": 3600,
-    "max_planner_steps": 30,
-    "max_planner_seconds": 600,
-    "max_worker_reviewer_steps": 50,
-    "max_worker_reviewer_seconds": 1800,
+    "max_agent_steps": 1000000,
+    "max_agent_seconds": 1000000,
+    "max_explorer_steps": 1000000,
+    "max_explorer_seconds": 1000000,
+    "max_worker_steps": 1000000,
+    "max_worker_seconds": 1000000,
+    "max_reviewer_steps": 1000000,
+    "max_reviewer_seconds": 1000000,
+    "max_workflow_seconds": 1000000,
+    "max_planner_steps": 1000000,
+    "max_planner_seconds": 1000000,
+    "max_worker_reviewer_steps": 1000000,
+    "max_worker_reviewer_seconds": 1000000,
     "workflow_outer_multiplier": 2,
-    "max_parallel_tool_calls": 4,
-    "max_parallel_workers": 2,
+    "max_parallel_tool_calls": 1000,
+    "max_parallel_workers": 1000,
     "parallel_agents_enabled": true
   },
   "goal": {
-    "default_max_turns": 20,
+    "default_max_turns": 1000000,
     "eval_input_chars": 12000,
-    "evaluator_max_steps": 5
+    "evaluator_max_steps": 1000000
   },
   "context": {
     "context_window_max_fraction": 0.4,

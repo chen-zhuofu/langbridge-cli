@@ -163,4 +163,4 @@ def test_workflow_worker_failure_returns_without_auto_refine(tmp_path, monkeypat
     reply = agent_worker(prompt="Fix login", description="worker")
 
     assert not refine_calls
-    assert "stopped (review did not pass)" in reply
+    assert "stopped before approval" in reply

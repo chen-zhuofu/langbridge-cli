@@ -4,6 +4,8 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 
+from langbridge_code.agents.common.todo_list import artifact_plan_path
+from langbridge_code.agents.common.workspace import plan_file_scope
 from langbridge_code.context.message import recent_chat_turns
 from langbridge_code.context.foreground import ForegroundTracker
 from langbridge_code.settings import GOAL_EVAL_INPUT_CHARS, GOAL_EVALUATOR_MAX_STEPS
@@ -26,7 +28,8 @@ not proof.
 
 Do the following every time:
 1. Read the completion condition.
-2. If a plan file exists (todo_list.md at the workspace root), read_file it —
+2. If a plan file exists (`todo_list.md` in the current session artifacts),
+   read_file it by its virtual path `todo_list.md` —
    check Desired end state and Success criteria.
 3. Gather evidence with tools (run verify commands, inspect files, check live URLs).
 4. Decide whether the condition is genuinely satisfied.
@@ -119,7 +122,8 @@ class GoalEvaluatorAgent:
             arguments = without_purpose(json.loads(call.get("arguments") or "{}"))
             if name not in GOAL_VERIFICATION_TOOLS:
                 raise ValueError(f"Unknown evaluator tool: {name}")
-            output = GOAL_VERIFICATION_TOOLS[name](**arguments)
+            with plan_file_scope(artifact_plan_path(self.run_log_path)):
+                output = GOAL_VERIFICATION_TOOLS[name](**arguments)
         except Exception as error:
             output = f"Tool error: {error}"
         return {"type": "function_call_output", "call_id": call_id, "output": output}

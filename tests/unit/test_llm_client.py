@@ -59,6 +59,38 @@ def test_to_chat_messages_with_tool_roundtrip():
     assert messages[4]["role"] == "user"
 
 
+def test_to_chat_messages_accepts_pending_placeholder_then_background_event():
+    agent_input = [
+        {"role": "user", "content": "run both"},
+        {
+            "type": "function_call",
+            "name": "agent_worker",
+            "call_id": "fast",
+            "arguments": "{}",
+        },
+        {
+            "type": "function_call",
+            "name": "agent_worker",
+            "call_id": "slow",
+            "arguments": "{}",
+        },
+        {"type": "function_call_output", "call_id": "fast", "output": "fast done"},
+        {"type": "function_call_output", "call_id": "slow", "output": "still running"},
+        {
+            "role": "user",
+            "content": "<background_tool_results>slow done</background_tool_results>",
+        },
+    ]
+
+    messages = to_chat_messages(agent_input)
+
+    assistant = messages[1]
+    assert [call["id"] for call in assistant["tool_calls"]] == ["fast", "slow"]
+    assert [message["tool_call_id"] for message in messages[2:4]] == ["fast", "slow"]
+    assert messages[4]["role"] == "user"
+    assert "slow done" in messages[4]["content"]
+
+
 def test_to_chat_messages_preserves_reasoning_content_for_tool_calls():
     agent_input = [
         {"role": "user", "content": "fix the bug"},

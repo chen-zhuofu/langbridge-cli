@@ -4,6 +4,11 @@ from __future__ import annotations
 from langbridge_code.context.common.stack import ContextStack
 from langbridge_code.llm.parse import extract_output_text
 from langbridge_code.util.agent_worklog import new_worklog_id
+from langbridge_code.util.agent_traces import (
+    append_agent_raw_round,
+    append_compaction_event,
+    reserve_agent_trace,
+)
 
 
 def normalize_step_items(step_items: list[dict]) -> list[dict]:
@@ -29,12 +34,25 @@ class AgentContextManager:
         run_log_path,
         label: str,
         worklog_id=None,
+        task_name: str = "",
     ):
         self.label = label
+        self.run_log_path = run_log_path
+        self.task_name = (task_name or "").strip()
+        self.worklog_id = worklog_id
+        self.last_completed_round: list[dict] = []
+        self._trace_round_index = 0
+        self.agent_trace_path = None
+        self.agent_trace_instance_id = None
+        if label != "LangBridge" and self.task_name:
+            self.agent_trace_path, self.agent_trace_instance_id = reserve_agent_trace(
+                run_log_path, label, self.task_name
+            )
         self._stack = ContextStack(
             system_content=system_content,
             label=label,
         )
+        self._stack.on_compaction = self._log_compaction
         self._messages: list[dict] | None = None
 
     @property
@@ -42,7 +60,32 @@ class AgentContextManager:
         return self._stack
 
     def set_worklog_id(self, run_log_path, worklog_id) -> None:
-        del run_log_path, worklog_id
+        self.run_log_path = run_log_path
+        self.worklog_id = worklog_id
+
+    def _log_compaction(self, event: dict) -> None:
+        payload = dict(event)
+        payload["role"] = self.label
+        payload["task_name"] = self.task_name or None
+        payload["instance_id"] = (
+            self.agent_trace_instance_id
+            if self.agent_trace_instance_id is not None
+            else self.worklog_id
+        )
+        append_compaction_event(self.run_log_path, payload)
+
+    def append_subagent_round(self) -> None:
+        if self.label == "LangBridge" or not self.last_completed_round:
+            return
+        append_agent_raw_round(
+            self.agent_trace_path,
+            role=self.label,
+            task_name=self.task_name,
+            instance_id=self.agent_trace_instance_id,
+            round_index=self._trace_round_index,
+            messages=self.last_completed_round,
+        )
+        self._trace_round_index += 1
 
     def attach(self, messages: list[dict], *, bootstrap: bool = False) -> list[dict]:
         self._messages = messages
@@ -71,7 +114,7 @@ class AgentContextManager:
         model,
         budget_tokens,
     ) -> dict:
-        self._stack.complete_step(normalize_step_items(step_items))
+        self.last_completed_round = self._stack.complete_step(normalize_step_items(step_items))
         stats = self._stack.maybe_advance(
             api_key=api_key,
             model=model,
@@ -98,12 +141,14 @@ def init_agent_context(
     run_log_path,
     label: str,
     seed_messages=None,
+    task_name: str = "",
 ) -> tuple[list[dict], AgentContextManager, int | None]:
     messages = seed_messages if seed_messages is not None else [{"role": "system", "content": system_prompt}]
     context = AgentContextManager(
         system_content=system_prompt,
         run_log_path=run_log_path,
         label=label,
+        task_name=task_name,
     )
     bootstrap = bool(seed_messages)
     context.attach(messages, bootstrap=bootstrap)
@@ -121,12 +166,14 @@ def finish_step(context: AgentContextManager, step_items: list[dict], session, b
         budget_tokens=budget,
     )
     run_log_path = getattr(session, "run_log_path", None)
-    rounds = context.stack.raw_rounds
-    if not run_log_path or not rounds:
+    completed_round = context.last_completed_round
+    if not run_log_path or not completed_round:
         return
     label = getattr(session, "label", "")
     turn_id = getattr(session, "turn_id", 0) or 0
     if label == "LangBridge":
         from langbridge_code.util.session_traces import append_raw_round
 
-        append_raw_round(run_log_path, turn_id, rounds[-1])
+        append_raw_round(run_log_path, turn_id, completed_round)
+    else:
+        context.append_subagent_round()

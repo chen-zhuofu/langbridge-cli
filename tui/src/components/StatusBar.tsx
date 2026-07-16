@@ -14,12 +14,10 @@ interface Props {
   cwd: string;
   gitBranch: string;
   contextLine: string;
-  bannerVisible: boolean;
 }
 
 export function StatusBar(props: Props) {
   const stateColor = props.state === "ready" ? undefined : props.state === "stopping" ? RED : YELLOW;
-  const headerHint = props.bannerVisible ? "ctrl+b header" : "ctrl+b show header";
   return (
     <Box justifyContent="space-between" paddingX={3} height={2} flexWrap="wrap" overflow="hidden">
       <Text>
@@ -48,10 +46,7 @@ export function StatusBar(props: Props) {
         <Text dimColor>{props.cwd}</Text>
         {props.gitBranch ? <Text color={GREEN} dimColor>{`  \u2387 ${props.gitBranch}`}</Text> : null}
       </Text>
-      <Text dimColor>
-        {props.contextLine}
-        {`   ${headerHint} \u00b7 ctrl+c quit \u00b7 /help`}
-      </Text>
+      {props.contextLine ? <Text dimColor>{props.contextLine}</Text> : null}
     </Box>
   );
 }

@@ -16,7 +16,7 @@ def _no_llm_prefetch(monkeypatch):
     import langbridge_code.memory as memory_mod
 
     monkeypatch.setattr(memory_mod, "prefetch_memory", lambda *args, **kwargs: "")
-    monkeypatch.setattr(memory_mod, "schedule_memory_extraction", lambda *args, **kwargs: None)
+    monkeypatch.setattr(memory_mod, "schedule_memory_writer", lambda *args, **kwargs: None)
     monkeypatch.setattr(
         skills_mod,
         "select_skill_index",

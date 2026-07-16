@@ -14,6 +14,8 @@ class WorktreeInfo:
     branch: str
     path: Path
     task_description: str
+    task_name: str = ""
+    base_commit: str | None = None
 
 
 def _run_git(*args, cwd=None):
@@ -38,12 +40,12 @@ def slugify(text: str, max_len: int = 28) -> str:
     return slug[:max_len].strip("-") or "task"
 
 
-def branch_name(run_log_path, index: int, description: str) -> str:
+def branch_name(run_log_path, task_name: str) -> str:
     from langbridge_code.util.artifacts import artifact_dir
 
     directory = artifact_dir(run_log_path)
     stem = ((directory.name if directory else "session") or "session")[:24]
-    return f"lb/{stem}/t{index}-{slugify(description)}"
+    return f"lb/{stem}/{slugify(task_name, max_len=48)}"
 
 
 def worktrees_dir(run_log_path) -> Path:
@@ -91,6 +93,8 @@ def record_branch(run_log_path, info: WorktreeInfo, status: str) -> None:
         "branch": info.branch,
         "path": str(info.path),
         "task": info.task_description,
+        "task_name": info.task_name,
+        "base_commit": info.base_commit,
         "status": status,
     }
     branches = [item for item in data["branches"] if item.get("branch") != info.branch]
@@ -118,31 +122,95 @@ def mark_branch_status(run_log_path, branch: str, status: str) -> None:
         save_registry(run_log_path, data)
 
 
-def create_worktree(run_log_path, index: int, description: str) -> WorktreeInfo:
-    branch = branch_name(run_log_path, index, description)
+def create_worktree(
+    run_log_path,
+    description: str,
+    *,
+    task_name: str,
+) -> WorktreeInfo:
+    stable_name = (task_name or "").strip()
+    if not stable_name:
+        raise RuntimeError("task_name is required to create a stable worktree.")
+    task_slug = slugify(stable_name, max_len=48)
+    branch = branch_name(run_log_path, stable_name)
     base = worktrees_dir(run_log_path)
     base.mkdir(parents=True, exist_ok=True)
-    path = base / f"t{index}-{slugify(description)}"
+    path = base / task_slug
+    base_result = _run_git("rev-parse", "HEAD")
+    base_commit = base_result.stdout.strip() if base_result.returncode == 0 else None
     if path.exists():
-        remove_worktree(WorktreeInfo(branch=branch, path=path, task_description=description), force=True)
+        raise RuntimeError(
+            f"Stable worktree path already exists for {stable_name!r}: {path}. "
+            "Resume it through the session registry instead of replacing it."
+        )
     result = _run_git("worktree", "add", "-b", branch, str(path), "HEAD")
-    if result.returncode != 0:
-        _run_git("branch", "-D", branch)
-        result = _run_git("worktree", "add", "-b", branch, str(path), "HEAD")
     if result.returncode != 0:
         raise RuntimeError(
             f"git worktree add failed for {branch}: {(result.stderr or result.stdout).strip()}"
         )
-    return WorktreeInfo(branch=branch, path=path, task_description=description)
+    return WorktreeInfo(
+        branch=branch,
+        path=path,
+        task_description=description,
+        task_name=stable_name,
+        base_commit=base_commit,
+    )
 
 
-def remove_worktree(info: WorktreeInfo, *, force: bool = False) -> None:
+def resumable_worktree(
+    run_log_path,
+    *,
+    task_name: str,
+    task_description: str,
+) -> WorktreeInfo | None:
+    """Return/recreate the failed worktree for the exact same task."""
+    stable_name = (task_name or "").strip()
+    if not stable_name:
+        return None
+    entries = list(reversed(load_registry(run_log_path).get("branches", [])))
+    for entry in entries:
+        if entry.get("status") != "failed":
+            continue
+        recorded_name = str(entry.get("task_name") or "").strip()
+        if recorded_name != stable_name:
+            continue
+        if entry.get("task") != task_description:
+            continue
+        branch = str(entry.get("branch") or "")
+        path_text = str(entry.get("path") or "")
+        if not branch or not path_text:
+            continue
+        path = Path(path_text)
+        if not path.exists():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            result = _run_git("worktree", "add", str(path), branch)
+            if result.returncode != 0:
+                continue
+        base_commit = entry.get("base_commit")
+        if not base_commit:
+            result = _run_git("merge-base", branch, "HEAD")
+            if result.returncode == 0:
+                base_commit = result.stdout.strip()
+        return WorktreeInfo(
+            branch=branch,
+            path=path,
+            task_description=task_description,
+            task_name=stable_name,
+            base_commit=base_commit or None,
+        )
+    return None
+
+
+def remove_worktree(info: WorktreeInfo, *, force: bool = False) -> bool:
     if not info.path.exists():
-        return
+        return True
     args = ["worktree", "remove"]
     if force:
         args.append("--force")
     args.append(str(info.path))
-    _run_git(*args)
+    result = _run_git(*args)
+    if result.returncode != 0:
+        return False
     if force:
         _run_git("branch", "-D", info.branch)
+    return True

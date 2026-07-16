@@ -1,3 +1,6 @@
+import pytest
+
+from langbridge_code.agents.common import control
 from langbridge_code.agents.common import worktree as worktree_mod
 from langbridge_code.tools.agent_worker_reviewer import (
     build_agent_worker_tool,
@@ -78,7 +81,7 @@ def test_dispatch_worker_does_not_auto_refine_plan(tmp_path, monkeypatch):
     reply = agent_worker(prompt="Fix login", description="worker")
 
     assert not planner_calls
-    assert "stopped (review did not pass)" in reply
+    assert "stopped before approval" in reply
 
 
 def test_dispatch_worker_uses_worktree_by_default(tmp_path, monkeypatch):
@@ -171,6 +174,67 @@ def test_dispatch_worker_failure_records_failed_branch_with_partial_work(tmp_pat
     assert commits == [("worker-partial", info.path)]
     assert "Worktree task stopped" in reply
     assert "partial work is committed on this branch" in reply
+
+
+def test_dispatch_worker_hard_stop_records_resumable_worktree_without_commit(
+    tmp_path, monkeypatch
+):
+    run_log = tmp_path / "run.json"
+    info = worktree_mod.WorktreeInfo(
+        "lb/run/t1-auth",
+        tmp_path / "wt",
+        "Add auth",
+        task_name="task-auth",
+    )
+    captured = {}
+    commits = []
+
+    monkeypatch.setattr(
+        "langbridge_code.tools.agent_worker_reviewer.worktree_mod.is_git_repo",
+        lambda cwd=None: True,
+    )
+    monkeypatch.setattr(
+        "langbridge_code.tools.agent_worker_reviewer.worktree_mod.create_worktree",
+        lambda *args, **kwargs: info,
+    )
+    monkeypatch.setattr(
+        "langbridge_code.tools.agent_worker_reviewer.worktree_mod.record_branch",
+        lambda run_log_path, wt_info, status: captured.update({"status": status}),
+    )
+    monkeypatch.setattr(
+        "langbridge_code.tools.agent_worker_reviewer.commit_task",
+        lambda *args, **kwargs: commits.append(args),
+    )
+
+    def stopped(*args, **kwargs):
+        raise control.StopRequested()
+
+    monkeypatch.setattr(
+        "langbridge_code.tools.agent_worker_reviewer.run_worker_reviewer_loop",
+        stopped,
+    )
+    monkeypatch.setattr(
+        "langbridge_code.tools.agent_worker_reviewer.emit_phase",
+        lambda *args, **kwargs: None,
+    )
+
+    agent_worker = build_agent_worker_tool(
+        api_key="key",
+        model="model",
+        run_log_path=run_log,
+        turn_id=1,
+        messages=[],
+        target="ship",
+    )
+    with pytest.raises(control.StopRequested):
+        agent_worker(
+            prompt="Add auth",
+            description="auth",
+            task_name="task-auth",
+        )
+
+    assert captured["status"] == "failed"
+    assert commits == []
 
 
 def test_dispatch_worker_runs_in_place_outside_git_repo(tmp_path, monkeypatch):

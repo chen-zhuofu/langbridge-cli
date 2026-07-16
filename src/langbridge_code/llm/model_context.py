@@ -12,7 +12,7 @@ _BUILTIN_MODEL_CONTEXT_WINDOWS: dict[str, int] = {
     "deepseek-v4-flash": 1_000_000,
     "deepseek-chat": 128_000,
     "deepseek-reasoner": 128_000,
-    "gpt-5.1-codex": 400_000,
+    "gpt-5.3-codex": 400_000,
     "gpt-5.1": 400_000,
     "gpt-5": 400_000,
     "gpt-4.1": 1_047_576,

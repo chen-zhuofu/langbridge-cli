@@ -14,7 +14,8 @@ MERGE_BRANCH_TOOL_SCHEMA = {
         "Merge one ready feature branch (from parallel agent_worker runs) into the "
         "main workspace. Main agent only — do not dispatch merge tasks to agent_worker. "
         "Call once per ready branch reported by the agent_worker results. On success "
-        "the branch is marked merged and its worktree is cleaned up. On conflicts the merge is left in "
+        "the branch is marked merged and that worktree is cleaned up. Failed branches "
+        "must be resumed in place and cannot be merged. On conflicts the merge is left in "
         "progress: resolve the listed files yourself with edit_file, stage with bash "
         "`git add`, commit with git_commit (or bash `git commit --no-edit`), then call "
         "merge_branch again with the same branch to confirm and clean up."
@@ -54,17 +55,35 @@ def _registry_entry(run_log_path, branch: str) -> dict | None:
     return None
 
 
-def _cleanup_branch(run_log_path, branch: str) -> None:
+def _cleanup_branch(run_log_path, branch: str) -> dict[str, list[str]]:
     worktree_mod.mark_branch_status(run_log_path, branch, "merged")
     entry = _registry_entry(run_log_path, branch)
     path = Path(entry["path"]) if entry and entry.get("path") else None
+    cleaned = []
+    failed = []
     if path is not None and path.exists():
-        worktree_mod.remove_worktree(
+        removed = worktree_mod.remove_worktree(
             worktree_mod.WorktreeInfo(branch=branch, path=path, task_description=""),
             force=True,
         )
+        (cleaned if removed else failed).append(branch)
     else:
         _run_git("branch", "-D", branch)
+    return {
+        "cleaned": cleaned,
+        "failed": failed,
+    }
+
+
+def _cleanup_note(cleanup: dict[str, list[str]]) -> str:
+    parts = []
+    if cleanup["cleaned"]:
+        parts.append(f"Cleaned {len(cleanup['cleaned'])} merged session worktree(s).")
+    if cleanup["failed"]:
+        parts.append(
+            "Cleanup failed for: " + ", ".join(cleanup["failed"]) + "."
+        )
+    return "\n".join(parts)
 
 
 def _conflicted_files() -> list[str]:
@@ -105,13 +124,14 @@ def merge_branch(branch, run_log_path=None):
         )
 
     ready = worktree_mod.ready_branches(run_log_path)
-    # Failed worker branches carry committed partial work; the main agent may
-    # merge one to continue from that state.
-    mergeable = ready + [
-        item["branch"]
-        for item in worktree_mod.load_registry(run_log_path).get("branches", [])
-        if item.get("status") == "failed" and item.get("branch")
-    ]
+    if branch not in ready:
+        listing = "\n".join(f"- {b}" for b in ready) or "- (none)"
+        return (
+            f"Tool error: branch {branch!r} is not ready. "
+            "Only reviewer-PASS branches can be merged; resume failed tasks in "
+            "their existing worktree.\nReady branches:\n"
+            + listing
+        )
 
     # Confirmation call after manual conflict resolution.
     if _branch_is_merged(branch):
@@ -121,17 +141,10 @@ def merge_branch(branch, run_log_path=None):
                 "Stage resolved files with `git add`, then `git commit --no-edit`, "
                 "then call merge_branch again."
             )
-        _cleanup_branch(run_log_path, branch)
+        cleanup = _cleanup_branch(run_log_path, branch)
         return (
             f"Branch {branch!r} is merged into HEAD. Marked merged and cleaned up "
-            f"its worktree.\n\n{_remaining_note(run_log_path)}"
-        )
-
-    if mergeable and branch not in mergeable:
-        return (
-            f"Tool error: branch {branch!r} is not in ready branches. "
-            "Merge one ready branch per call.\n"
-            "Ready branches:\n" + "\n".join(f"- {b}" for b in mergeable)
+            f"its worktree.\n{_cleanup_note(cleanup)}\n\n{_remaining_note(run_log_path)}"
         )
 
     if _merge_in_progress():
@@ -145,11 +158,11 @@ def merge_branch(branch, run_log_path=None):
 
     result = _run_git("merge", "--no-edit", branch)
     if result.returncode == 0:
-        _cleanup_branch(run_log_path, branch)
+        cleanup = _cleanup_branch(run_log_path, branch)
         summary = (result.stdout or "").strip()
         return (
             f"Merged {branch!r} into the main workspace.\n"
-            f"{summary}\n\n{_remaining_note(run_log_path)}"
+            f"{summary}\n{_cleanup_note(cleanup)}\n\n{_remaining_note(run_log_path)}"
         )
 
     conflicts = _conflicted_files()

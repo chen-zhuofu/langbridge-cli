@@ -407,6 +407,37 @@ def maybe_compact_progress(api_key, model, run_log_path, task_name: str | None =
         body = _render_progress_document(preamble, new_sections)
         with _progress_lock:
             write_progress(run_log_path, body, task_name)
+        from langbridge_code.util.agent_traces import append_compaction_event
+
+        append_compaction_event(
+            run_log_path,
+            {
+                "type": "progress_compaction",
+                "role": "TaskProgress" if task_name else "LangBridge",
+                "task_name": task_name,
+                "instance_id": None,
+                "model": model,
+                "before": {
+                    "tokens": estimate_tokens(content),
+                    "turn_section_count": len(sections),
+                },
+                "input": {
+                    "progress_markdown": content,
+                    "merged_middle_sections": [
+                        {"heading": section.heading, "body": section.body}
+                        for section in middle
+                    ],
+                },
+                "output": {
+                    "merged_middle_markdown": merged_text,
+                    "progress_markdown": body,
+                },
+                "after": {
+                    "tokens": estimate_tokens(body),
+                    "turn_section_count": len(new_sections),
+                },
+            },
+        )
         changed = True
         if estimate_tokens(body) <= budget:
             break

@@ -14,7 +14,10 @@ from langbridge_code.util.read_file_in_range import (
 
 WORKSPACE_ROOT = Path.cwd().resolve()
 
-from langbridge_code.agents.common.workspace import get_workspace_root  # noqa: E402
+from langbridge_code.agents.common.workspace import (  # noqa: E402
+    get_plan_file_override,
+    get_workspace_root,
+)
 
 DEFAULT_GLOB_LIMIT = 100
 DEFAULT_GREP_HEAD_LIMIT = 250
@@ -363,6 +366,14 @@ def tool(name):
 
 
 def resolve_workspace_path(path):
+    candidate = Path(path)
+    plan_override = get_plan_file_override()
+    if (
+        plan_override is not None
+        and not candidate.is_absolute()
+        and candidate.parts == ("todo_list.md",)
+    ):
+        return plan_override
     target = (get_workspace_root() / path).resolve()
     try:
         target.relative_to(get_workspace_root())

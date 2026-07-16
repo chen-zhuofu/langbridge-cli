@@ -17,11 +17,13 @@ export const HELP_TEXT = `Commands:
   /goal pause        pause goal auto-continue
   /goal resume       resume a paused goal
   /banner [on|off]   show or hide the header box (Ctrl+B toggles)
+  /copy              copy the last assistant reply to the clipboard
   /exit              quit
 
 Keys: Enter send · Shift+Enter / Ctrl+J newline
+      Home/End · Ctrl+W delete word · Ctrl+U/K clear line
       Ctrl+A approve · Ctrl+D deny · Ctrl+Y yolo · Ctrl+P pause · Ctrl+S stop
-      Ctrl+R sessions · Ctrl+B header · PageUp/PageDown scroll chat
-      Ctrl+C quit
+      Ctrl+R sessions · Ctrl+B header · Ctrl+E select/wheel · Ctrl+O copy
+      PageUp/PageDown or Ctrl+↑/↓ scroll · Ctrl+C quit
 While the agent is busy, Enter queues your message; queued messages run only
 after the current turn finishes successfully (not after /stop or errors).`;

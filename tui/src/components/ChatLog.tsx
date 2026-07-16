@@ -84,9 +84,16 @@ function explodeAll(lines: ChatLine[], width: number): RenderRow[] {
   return rows;
 }
 
+const SCROLLBAR_COLS = 1;
+
+/** Content columns inside ChatLog (outer width minus the scrollbar gutter). */
+export function chatContentWidth(width: number): number {
+  return Math.max(20, width - SCROLLBAR_COLS);
+}
+
 /** Total rendered rows for the chat content; used to clamp scrolling. */
 export function totalRowCount(lines: ChatLine[], width: number): number {
-  return explodeAll(lines, Math.max(20, width)).length;
+  return explodeAll(lines, chatContentWidth(width)).length;
 }
 
 interface Props {
@@ -96,19 +103,59 @@ interface Props {
   scrollOffset: number; // 0 = follow tail; N = rows scrolled up from bottom
 }
 
+/**
+ * Build a 1-column scrollbar: dim track + accent thumb.
+ * scrollOffset 0 = pinned to bottom (thumb at bottom); higher = scrolled up.
+ */
+function scrollbarGlyphs(height: number, total: number, view: number, offset: number): string[] {
+  const glyphs = Array.from({ length: height }, () => "│");
+  if (total <= view || height <= 0) {
+    return glyphs.map(() => " ");
+  }
+  const maxScroll = total - view;
+  const thumbSize = Math.max(1, Math.min(height, Math.round((view / total) * height)));
+  const travel = Math.max(0, height - thumbSize);
+  const clamped = Math.max(0, Math.min(maxScroll, offset));
+  // Convert bottom-based offset into a top-based thumb position.
+  const thumbTop = travel === 0 ? 0 : Math.round(((maxScroll - clamped) / maxScroll) * travel);
+  for (let i = thumbTop; i < thumbTop + thumbSize && i < height; i++) {
+    glyphs[i] = "█";
+  }
+  return glyphs;
+}
+
 export function ChatLog({ lines, height, width, scrollOffset }: Props) {
-  const contentWidth = Math.max(20, width);
+  const contentWidth = chatContentWidth(width);
   const rows = explodeAll(lines, contentWidth);
   const end = Math.max(0, rows.length - Math.max(0, scrollOffset));
   const start = Math.max(0, end - height);
   const visible = rows.slice(start, end);
+  const bar = scrollbarGlyphs(height, rows.length, height, scrollOffset);
   // column-reverse anchors the newest row to the bottom edge, so any estimate
   // error clips old rows at the top instead of hiding the newest.
   return (
-    <Box flexDirection="column-reverse" height={height} paddingX={2} overflow="hidden">
-      {[...visible].reverse().map((row) => (
-        <RowView key={row.key} row={row} />
-      ))}
+    <Box flexDirection="row" width={width} height={height} overflow="hidden">
+      <Box
+        flexDirection="column-reverse"
+        height={height}
+        width={contentWidth}
+        paddingX={2}
+        overflow="hidden"
+        flexGrow={1}
+      >
+        {[...visible].reverse().map((row) => (
+          <RowView key={row.key} row={row} />
+        ))}
+      </Box>
+      <Box flexDirection="column" width={SCROLLBAR_COLS} height={height} overflow="hidden">
+        {bar.map((glyph, index) => (
+          <Box key={index} height={1} width={SCROLLBAR_COLS}>
+            <Text color={glyph === "█" ? ACCENT : undefined} dimColor={glyph !== "█"}>
+              {glyph}
+            </Text>
+          </Box>
+        ))}
+      </Box>
     </Box>
   );
 }
